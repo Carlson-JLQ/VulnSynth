@@ -1,0 +1,20 @@
+name: vulnsynth 
+channels:
+  - defaults
+dependencies:
+  - pip=25.1=pyhc872135_2
+  - python=3.11.11=he870216_0
+  - readline=8.2=h5eee18b_0
+  - setuptools=78.1.1=py311h06a4308_0
+  - wheel=0.45.1=py311h06a4308_0
+  - pip: 
+      - asyncio==3.4.3
+      - beautifulsoup4==4.13.4
+      - chroma-mcp==0.2.5
+      - chromadb==1.0.15 
+      - mcp==1.8.1 
+      - openai==1.95.1
+      - pandas==2.3.1 
+      - python-dateutil==2.9.0.post0
+      - python-dotenv==1.1.0
+      - requests==2.32.3
