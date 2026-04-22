@@ -1,0 +1,20 @@
+model = "gpt-5"
+model_reasoning_effort = "minimal"
+[projects."/path/to/project"]
+trust_level = "trusted"
+
+[mcp_servers.chroma]
+command = "uvx"
+args = ["chroma-mcp", "--client-type", "http", "--host", "localhost", --"port", "8000", "--custom-auth-credentials", "test", "--ssl", "false"]
+
+[mcp_servers.codeql]
+command = "node"
+args = ["/path/to/codeql-lsp-mcp/dist/index.js"]
+
+[model_providers.ollama]
+name = "Ollama"
+base_url = "http://localhost:11434/v1"
+[profiles.gpt-oss-20b]
+model_provider = "ollama"
+model = "gpt-oss:20b"
+wire_api = "chat"

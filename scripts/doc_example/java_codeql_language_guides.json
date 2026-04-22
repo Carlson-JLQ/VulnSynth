@@ -1,0 +1,124 @@
+{
+  "collection": "java_codeql_language_guides",
+  "total_count": 86,
+  "sample_size": 5,
+  "items": [
+    {
+      "id": "java_codeql_language_guides_c091755be680_example_15",
+      "document": "Code Example from Analyzing data flow in Java and Kotlin¶:\n\n```codeql\nimport java\n\nfrom Constructor fileReader, Call call\nwhere\n  fileReader.getDeclaringType().hasQualifiedName(\"java.io\", \"FileReader\") and\n  call.getCallee() = fileReader\nselect call.getArgument(0)\n```",
+      "metadata": {
+        "source": "codeql_docs",
+        "url": "https://codeql.github.com/docs/codeql-language-guides/analyzing-data-flow-in-java/",
+        "example_language": "codeql",
+        "doc_type": "language_guide",
+        "parent_title": "Analyzing data flow in Java and Kotlin¶",
+        "language": "java",
+        "type": "code_example"
+      },
+      "embedding_preview": [
+        -0.07045309990644455,
+        0.0380728654563427,
+        -0.025501824915409088,
+        0.023176250979304314,
+        -0.058162759989500046,
+        -0.08266191184520721,
+        0.05338684096932411,
+        0.04942668229341507
+      ],
+      "embedding_dim": 384
+    },
+    {
+      "id": "java_codeql_language_guides_f7eefe91e8e7_example_7",
+      "document": "Code Example from Navigating the call graph¶:\n\n```codeql\nimport java\n\nfrom Callable callee\nwhere not exists(Callable caller | caller.polyCalls(callee)) and\n    callee.getCompilationUnit().fromSource()\nselect callee, \"Not called.\"\n```",
+      "metadata": {
+        "type": "code_example",
+        "parent_title": "Navigating the call graph¶",
+        "doc_type": "language_guide",
+        "example_language": "codeql",
+        "source": "codeql_docs",
+        "url": "https://codeql.github.com/docs/codeql-language-guides/navigating-the-call-graph/"
+      },
+      "embedding_preview": [
+        -0.05592812970280647,
+        -0.012996372766792774,
+        -0.0627070814371109,
+        0.0005434431950561702,
+        -0.12373388558626175,
+        -0.07582823932170868,
+        0.06411135196685791,
+        0.009045393206179142
+      ],
+      "embedding_dim": 384
+    },
+    {
+      "id": "java_codeql_language_guides_9fcd62d086b2",
+      "document": "# Basic query for Java and Kotlin code¶\n\nURL: https://codeql.github.com/docs/codeql-language-guides/basic-query-for-java-code/\n\n- CodeQL »\n- CodeQL language guides »\n- CodeQL for Java and Kotlin »\n\n\n# Basic query for Java and Kotlin code¶\n\nLearn to write and run a simple CodeQL query using Visual Studio Code with the CodeQL extension.\n\nFor information about installing the CodeQL extension for Visual Studio code, see “Installing CodeQL for Visual Studio Code.”\n\n\n## About the query¶\n\nThe query we’re going to run searches for inefficient tests for empty strings. For example, Java code such as:\n\n\n```\npublic class TestJava {\n    void myJavaFun(String s) {\n        boolean b = s.equals(\"\");\n    }\n}\n```\n\nor Kotlin code such as:\n\n\n```\nvoid myKotlinFun(s: String) {\n    var b = s.equals(\"\")\n}\n```\n\nIn either case, replacing s.equals(\"\") with s.isEmpty()\nwould be more efficient.\n\n`s.equals(\"\")`\n`s.isEmpty()`\n\n## Finding a CodeQL database to experiment with¶\n\nBefore you start writing queries for Java/Kotlin code, you need a CodeQL database to run them against. The simplest way to do this is to download a database for a repository that uses Java/Kotlin directly from GitHub.com.\n\n- In Visual Studio Code, click the QL icon  in the left sidebar to display the CodeQL extension.\n- Click From GitHub or the GitHub logo  at the top of the CodeQL extension to open an entry field.\n- Copy the URL for the repository into the field and press the keyboard Enter key. For example, https://github.com/apache/activemq.\n- Optionally, if the repository has more than one CodeQL database available, select java to download the database created from the Java/Kotlin code.\n\nIn Visual Studio Code, click the QL icon  in the left sidebar to display the CodeQL extension.\n\nClick From GitHub or the GitHub logo  at the top of the CodeQL extension to open an entry field.\n\nCopy the URL for the repository into the field and press the keyboard Enter key. For example, https://github.com/apache/activemq.\n\nOptionally, if the repository has more than one CodeQL database available, select java to download the database created from the Java/Kotlin code.\n\n`java`\nInformation about the download progress for the database is shown in the bottom right corner of Visual Studio Code. When the download is complete, the database is shown with a check mark in the Databases section of the CodeQL extension (see screenshot below).\n\n\n## Running a quick query¶\n\nThe CodeQL extension for Visual Studio Code adds several CodeQL: commands to the command palette including Quick Query, which you can use to run a query without any set up.\n\n- From the command palette in Visual Studio Code, select CodeQL: Quick Query.\n- After a moment, a new tab quick-query.ql is opened, ready for you to write a query for your currently selected CodeQL database (here a java database). If you are prompted to reload your workspace as a multi-folder workspace to allow Quick queries, accept or create a new workspace using the starter workflow.\n\nFrom the command palette in Visual Studio Code, select CodeQL: Quick Query.\n\nAfter a moment, a new tab quick-query.ql is opened, ready for you to write a query for your currently selected CodeQL database (here a java database). If you are prompted to reload your workspace as a multi-folder workspace to allow Quick queries, accept or create a new workspace using the starter workflow.\n\n`java`\n- In the quick query tab, delete select \"\" and paste the following query beneath the import statement import java.\nfrom MethodCall mc\nwhere\n    mc.getMethod().hasName(\"equals\") and\n    mc.getArgument(0).(StringLiteral).getValue() = \"\"\nselect mc, \"This comparison to empty string is inefficient, use isEmpty() instead.\"\n\n\nNote that CodeQL treats Java and Kotlin as part of the same language, so even though this query starts with import java, it will work for both Java and Kotlin code.\n\nIn the quick query tab, delete select \"\" and paste the following query beneath the import statement import java.\n\n`select \"\"`\n`import java`\n\n```\nfrom MethodCall mc\nwhere\n    mc.getMethod().hasName(\"equals\") and\n    mc.getArgument(0).(StringLiteral).getValue() = \"\"\nselect mc, \"This comparison to empty string is inefficient, use isEmpty() instead.\"\n```\n\nNote that CodeQL treats Java and Kotlin as part of the same language, so even though this query starts with import java, it will work for both Java and Kotlin code.\n\n`import java`\n- Save the query in its default location (a temporary “Quick Queries” directory under the workspace for GitHub.vscode-codeql/quick-queries).\n- Right-click in the query tab and select CodeQL: Run Query on Selected Database. (Alternatively, run the command from the Command Palette.)\nThe query will take a few moments to return results. When the query completes, the results are displayed in a CodeQL Query Results view, next to the main editor view.\nThe query results are listed in two columns, corresponding to the expressions in the select clause of the query. The first column corresponds to the expression mc and is linked to the location in the source code of the project where mc occurs. The second column is the alert message.\n\nSave the query in its default location (a temporary “Quick Queries” directory under the workspace for GitHub.vscode-codeql/quick-queries).\n\n`GitHub.vscode-codeql/quick-queries`\nRight-click in the query tab and select CodeQL: Run Query on Selected Database. (Alternatively, run the command from the Command Palette.)\n\nThe query will take a few moments to return results. When the query completes, the results are displayed in a CodeQL Query Results view, next to the main editor view.\n\nThe query results are listed in two columns, corresponding to the expressions in the select clause of the query. The first column corresponds to the expression mc and is linked to the location in the source code of the project where mc occurs. The second column is the alert message.\n\n`select`\n`mc`\n`mc`\nIf any matching code is found, click a link in the mc column to view the .equals expression in the code viewer.\n\n`mc`\n`.equals`\nNote\n\nIf you want to move your experimental query somewhere more permanent, you need to move the whole Quick Queries directory. The directory is a CodeQL pack with a qlpack.yml file that defines the content as queries for Java/Kotlin CodeQL databases. For more information about CodeQL packs, see “Managing CodeQL query packs and library packs.”\n\n`Quick Queries`\n`qlpack.yml`\n\n### About the query structure¶\n\nAfter the initial import statement, this simple query comprises three parts that serve similar purposes to the FROM, WHERE, and SELECT parts of an SQL query.\n\n`import`\nQuery part\n\nPurpose\n\nDetails\n\nimport java\n\n`import java`\nImports the standard CodeQL libraries for Java and Kotlin.\n\nEvery query begins with one or more import statements.\n\n`import`\nfrom MethodCall mc\n\n`from MethodCall mc`\nDefines the variables for the query.\nDeclarations are of the form:\n<type> <variable name>\n\n`<type> <variable name>`\nWe use:\n\n- a MethodCall variable for call expressions\n\na MethodCall variable for call expressions\n\n`MethodCall`\nwhere mc.getMethod().hasName(\"equals\") and mc.getArgument(0).(StringLiteral).getValue() = \"\"\n\n`where mc.getMethod().hasName(\"equals\") and mc.getArgument(0).(StringLiteral).getValue() = \"\"`\nDefines a condition on the variables.\n\nmc.getMethod().hasName(\"equals\") restricts mc to only calls to methods call equals.\n\n`mc.getMethod().hasName(\"equals\")`\n`mc`\n`equals`\nmc.getArgument(0).(StringLiteral).getValue() = \"\" says the argument must be literal \"\".\n\n`mc.getArgument(0).(StringLiteral).getValue() = \"\"`\n`\"\"`\nselect mc, \"This comparison to empty string is inefficient, use isEmpty() instead.\"\n\n`select mc, \"This comparison to empty string is inefficient, use isEmpty() instead.\"`\nDefines what to report for each match.\n\nselect statements for queries that are used to find instances of poor coding practice are always in the form:\nselect <program element>, \"<alert message>\"\n\n`select`\n`select <program element>, \"<alert message>\"`\nReports the resulting .equals expression with a string that explains the problem.\n\n`.equals`\n\n## Extend the query¶\n\nQuery writing is an inherently iterative process. You write a simple query and then, when you run it, you discover examples that you had not previously considered, or opportunities for improvement.\n\n\n### Remove false positive results¶\n\nBrowsing the results of our basic query shows that it could be improved. For example, you may find results for code like:\n\n\n```\npublic class TestJava {\n    void myJavaFun(Object o) {\n        boolean b = o.equals(\"\");\n    }\n}\n```\n\nIn this case, it is not possible to simply use o.isEmpty() instead, as o has type Object rather than String. One solution to this is to modify the query to only return results where the expression being tested has type String:\n\n`o.isEmpty()`\n`o`\n`Object`\n`String`\n`String`\n- Extend the where clause to include the following extra condition:\nmc.getQualifier().getType() instanceof TypeString\n\n\nThe where clause is now:\nwhere\n  mc.getQualifier().getType() instanceof TypeString and\n  mc.getMethod().hasName(\"equals\") and\n  mc.getArgument(0).(StringLiteral).getValue() = \"\"\n- Re-run the query.\nThere are now fewer results because .equals expressions with different types are no longer included.\n\nExtend the where clause to include the following extra condition:\n\n\n```\nmc.getQualifier().getType() instanceof TypeString\n```\n\nThe where clause is now:\n\n`where`\n\n```\nwhere\n  mc.getQualifier().getType() instanceof TypeString and\n  mc.getMethod().hasName(\"equals\") and\n  mc.getArgument(0).(StringLiteral).getValue() = \"\"\n```\n\nRe-run the query.\n\nThere are now fewer results because .equals expressions with different types are no longer included.\n\n`.equals`\n\n## Further reading¶\n\n- CodeQL queries for Java\n- Example queries for Java\n- CodeQL library reference for Java\n\nCodeQL queries for Java\n\nExample queries for Java\n\nCodeQL library reference for Java\n\n- “QL language reference”\n- “CodeQL tools”\n\n“QL language reference”\n\n“CodeQL tools”\n\n- \n- \n- \n- \n- \n\n- ©\n                 GitHub, Inc.\n- Terms\n- Privacy\n",
+      "metadata": {
+        "language": "java",
+        "doc_type": "language_guide",
+        "url": "https://codeql.github.com/docs/codeql-language-guides/basic-query-for-java-code/",
+        "source": "codeql_docs",
+        "type": "documentation"
+      },
+      "embedding_preview": [
+        -0.044981949031353,
+        0.0189828984439373,
+        0.0060554686933755875,
+        0.057698119431734085,
+        -0.09068667143583298,
+        -0.0332442969083786,
+        -0.003179504070430994,
+        0.04185588285326958
+      ],
+      "embedding_dim": 384
+    },
+    {
+      "id": "java_codeql_language_guides_9fcd62d086b2_example_11",
+      "document": "Code Example from Basic query for Java and Kotlin code¶:\n\n```java\nmc.getQualifier().getType() instanceof TypeString\n```",
+      "metadata": {
+        "doc_type": "language_guide",
+        "type": "code_example",
+        "url": "https://codeql.github.com/docs/codeql-language-guides/basic-query-for-java-code/",
+        "language": "java",
+        "example_language": "java",
+        "source": "codeql_docs",
+        "parent_title": "Basic query for Java and Kotlin code¶"
+      },
+      "embedding_preview": [
+        -0.02456817775964737,
+        0.06088227033615112,
+        0.054854992777109146,
+        0.03201153129339218,
+        -0.08266624063253403,
+        0.001992845442146063,
+        0.04853447154164314,
+        0.0508141964673996
+      ],
+      "embedding_dim": 384
+    },
+    {
+      "id": "java_codeql_language_guides_f44628dd1102_example_7",
+      "document": "Code Example from CodeQL library for Java and Kotlin¶:\n\n```codeql\nimport java\n\nfrom TypeVariable tv, TypeBound tb\nwhere tb = tv.getATypeBound() and\n    tb.getType().hasQualifiedName(\"java.lang\", \"Number\")\nselect tv\n```",
+      "metadata": {
+        "type": "code_example",
+        "url": "https://codeql.github.com/docs/codeql-language-guides/codeql-library-for-java/",
+        "language": "java",
+        "example_language": "codeql",
+        "source": "codeql_docs",
+        "parent_title": "CodeQL library for Java and Kotlin¶",
+        "doc_type": "language_guide"
+      },
+      "embedding_preview": [
+        0.005008937790989876,
+        -0.007824378088116646,
+        -0.0025035745929926634,
+        -0.010347312316298485,
+        -0.09671027958393097,
+        0.027484465390443802,
+        0.07654166966676712,
+        0.02409333921968937
+      ],
+      "embedding_dim": 384
+    }
+  ]
+}

@@ -1,0 +1,130 @@
+{
+  "collection": "cpp_codeql_local_queries",
+  "total_count": 1879,
+  "sample_size": 5,
+  "items": [
+    {
+      "id": "local_query_6_0_0_semmle_code_cpp_controlflow_internal_PrimitiveBasicBlocks_qll",
+      "document": "# PrimitiveBasicBlocks.qll\n\n**Type**: library\n**Path**: 6.0.0/semmle/code/cpp/controlflow/internal/PrimitiveBasicBlocks.qll\n**Category**: general\n\n\n```codeql\n/**\n * INTERNAL: use the `BasicBlocks` library instead.\n * This library defines `PrimitiveBasicBlock`s, an intermediate stage in the\n * computation of `BasicBlock`s.\n */\n\n/*\n * Unlike `BasicBlock`s, `PrimitiveBasicBlock`s are constructed using\n * the primitive `successors_extended` relation only. That is, impossible\n * edges removed in `successors_adapted` are still taken into account.\n *\n * `PrimitiveBasicBlock`s are used as helper entities for actually\n * constructing `successors_adapted`, hence the need for two \"layers\"\n * of basic blocks. In addition to being used to construct\n * `successors_adapted`, the relations for `BasicBlocks` (e.g.,\n * `basic_block_entry_node`) can reuse the relations computed here\n * (e.g, `primitive_basic_block_entry_node`), as most `BasicBlock`s\n * will coincide with `PrimitiveBasicBlock`s.\n */\n\nimport cpp\n\nprivate class Node = ControlFlowNodeBase;\n\nimport Cached\n\ncached\nprivate module Cached {\n  /** Holds if `node` is the entry node of a primitive basic block. */\n  cached\n  predicate primitive_basic_block_entry_node(Node node) {\n    // The entry point of the CFG is the start of a BB.\n    exists(Function f | f.getEntryPoint() = node)\n    or\n    // If the node has more than one predecessor,\n    // or the node's predecessor has more than one successor,\n    // then the node is the start of a new primitive basic block.\n    strictcount(Node pred | successors_extended(pred, node)) > 1\n    or\n    exists(ControlFlowNode pred | successors_extended(pred, node) |\n      strictcount(ControlFlowNode other | successors_extended(pred, other)) > 1\n    )\n    or\n    // If the node has zero predecessors then it is the start of\n    // a BB. However, the C++ AST contains many nodes with zero\n    // predecessors and zero successors, which are not members of\n    // the CFG. So we exclude all of those trivial BBs by requiring\n    // that the node have at least one successor.\n    not successors_extended(_, node) and successors_extended(node, _)\n    or\n    // An exception handler is always the start of a new basic block. We\n    // don't generate edges for [possible] exceptions, but in practice control\n    // flow could reach the handler from anywhere inside the try block that\n    // could throw an exception of a corresponding type. A `Handler` usually\n    // needs to be considered reachable (see also `BasicBlock.isReachable`).\n    node instanceof Handler\n  }\n\n  /** Holds if `n2` follows `n1` in a `PrimitiveBasicBlock`. */\n  private predicate member_step(Node n1, Node n2) {\n    successors_extended(n1, n2) and\n    not n2 instanceof PrimitiveBasicBlock\n  }\n\n  /** Holds if `node` is the `pos`th control-flow node in primitive basic block `bb`. */\n  cached\n  predicate primitive_basic_block_member(Node node, PrimitiveBasicBlock bb, int pos) {\n    primitive_basic_block_entry_node(bb) and node = bb and pos = 0\n    or\n    exists(Node prev |\n      member_step(prev, node) and\n      primitive_basic_block_member(prev, bb, pos - 1)\n    )\n  }\n\n  /** Gets the number of control-flow nodes in the primitive basic block `bb`. */\n  cached\n  int primitive_bb_length(PrimitiveBasicBlock bb) {\n    result = strictcount(Node node | primitive_basic_block_member(node, bb, _))\n  }\n\n  /** Successor relation for primitive basic blocks. */\n  cached\n  predicate primitive_bb_successor(PrimitiveBasicBlock pred, PrimitiveBasicBlock succ) {\n    exists(Node last |\n      primitive_basic_block_member(last, pred, primitive_bb_length(pred) - 1) and\n      successors_extended(last, succ)\n    )\n  }\n}\n\n/**\n * A primitive basic block in the C/C++ control-flow graph constructed using\n * the primitive `successors_extended` relation only.\n */\nclass PrimitiveBasicBlock extends Node {\n  PrimitiveBasicBlock() { primitive_basic_block_entry_node(this) }\n\n  predicate contains(Node node) { primitive_basic_block_member(node, this, _) }\n\n  Node getNode(int pos) { primitive_basic_block_member(result, this, pos) }\n\n  Node getANode() { primitive_basic_block_member(result, this, _) }\n\n  PrimitiveBasicBlock getASuccessor() { primitive_bb_successor(this, result) }\n\n  PrimitiveBasicBlock getAPredecessor() { primitive_bb_successor(result, this) }\n\n  int length() { result = primitive_bb_length(this) }\n}\n\n```",
+      "metadata": {
+        "relative_path": "6.0.0/semmle/code/cpp/controlflow/internal/PrimitiveBasicBlocks.qll",
+        "type": "library",
+        "file_path": "/opt/codeql-bundle-2.23.3/codeql/qlpacks/codeql/cpp-all/6.0.0/semmle/code/cpp/controlflow/internal/PrimitiveBasicBlocks.qll",
+        "category": "general",
+        "source": "local_codeql"
+      },
+      "embedding_preview": [
+        -0.0949571430683136,
+        0.009042912162840366,
+        -0.040073540061712265,
+        -0.011957458220422268,
+        -0.0924312099814415,
+        0.0054528312757611275,
+        -0.07678579539060593,
+        0.03610691800713539
+      ],
+      "embedding_dim": 384
+    },
+    {
+      "id": "local_query_1_5_2_Metrics_Files_FTransitiveSourceIncludes_ql",
+      "document": "# FTransitiveSourceIncludes.ql\n\n**Type**: query\n**Path**: 1.5.2/Metrics/Files/FTransitiveSourceIncludes.ql\n**Category**: general\n\n**Name**: Indirect source includes per file\n**Description**: The number of source files included by the\n\n```codeql\n/**\n * @name Indirect source includes per file\n * @description The number of source files included by the\n *              pre-processor - either directly by an `#include`\n *              directive, or indirectly (by being included by an\n *              included file). This metric excludes included files\n *              that aren't part of the main code base (like system\n *              headers).\n * @kind treemap\n * @id cpp/transitive-source-includes-per-file\n * @treemap.warnOn highValues\n * @metricType file\n * @metricAggregate avg max\n * @tags maintainability\n *       modularity\n */\n\nimport cpp\n\npredicate isInCodebase(File f) {\n  exists(string prefix | sourceLocationPrefix(prefix) |\n    f.getAbsolutePath().prefix(prefix.length()) = prefix\n  )\n}\n\nfrom File f, int n\nwhere\n  f.fromSource() and\n  n = count(File g | g = f.getAnIncludedFile+() and isInCodebase(g))\nselect f, n\n\n```",
+      "metadata": {
+        "name": "Indirect source includes per file",
+        "source": "local_codeql",
+        "description": "The number of source files included by the",
+        "kind": "treemap",
+        "relative_path": "1.5.2/Metrics/Files/FTransitiveSourceIncludes.ql",
+        "category": "general",
+        "tags": "maintainability",
+        "file_path": "/opt/codeql-bundle-2.23.3/codeql/qlpacks/codeql/cpp-queries/1.5.2/Metrics/Files/FTransitiveSourceIncludes.ql",
+        "type": "query"
+      },
+      "embedding_preview": [
+        -0.04223966225981712,
+        0.016393516212701797,
+        -0.06166837736964226,
+        0.07878677546977997,
+        0.032614123076200485,
+        0.003789978101849556,
+        0.02701650559902191,
+        0.051259029656648636
+      ],
+      "embedding_dim": 384
+    },
+    {
+      "id": "cwe_query_1_5_2_Security_CWE_CWE-457_ConditionallyUninitializedVariable_ql",
+      "document": "# ConditionallyUninitializedVariable.ql\n\n**Type**: query\n**Path**: 1.5.2/Security/CWE/CWE-457/ConditionallyUninitializedVariable.ql\n**Category**: security\n\n**CWE**: CWE-457\n**Name**: Conditionally uninitialized variable\n**Description**: An initialization function is used to initialize a local variable, but the\n\n```codeql\n/**\n * @name Conditionally uninitialized variable\n * @description An initialization function is used to initialize a local variable, but the\n *              returned status code is not checked. The variable may be left in an uninitialized\n *              state, and reading the variable may result in undefined behavior.\n * @kind problem\n * @problem.severity warning\n * @security-severity 7.8\n * @id cpp/conditionally-uninitialized-variable\n * @tags security\n *       external/cwe/cwe-457\n */\n\nimport cpp\nimport semmle.code.cpp.controlflow.SSA\nprivate import UninitializedVariables\n\nfrom\n  ConditionallyInitializedVariable v, ConditionalInitializationFunction f,\n  ConditionalInitializationCall call, string defined, Evidence e\nwhere\n  exists(v.getARiskyAccess(f, call, e)) and\n  (\n    if e = DefinitionInSnapshot()\n    then defined = \"\"\n    else\n      if e = SuggestiveSalAnnotation()\n      then defined = \"externally defined (SAL) \"\n      else defined = \"externally defined (CSV) \"\n  )\nselect call,\n  \"The status of this call to \" + defined +\n    \"$@ is not checked, potentially leaving $@ uninitialized.\", f, f.getName(), v, v.getName()\n\n```",
+      "metadata": {
+        "type": "query",
+        "source": "local_codeql_cwe",
+        "name": "Conditionally uninitialized variable",
+        "file_path": "/opt/codeql-bundle-2.23.3/codeql/qlpacks/codeql/cpp-queries/1.5.2/Security/CWE/CWE-457/ConditionallyUninitializedVariable.ql",
+        "tags": "security",
+        "relative_path": "1.5.2/Security/CWE/CWE-457/ConditionallyUninitializedVariable.ql",
+        "cwe_number": "457",
+        "category": "security",
+        "kind": "problem",
+        "description": "An initialization function is used to initialize a local variable, but the"
+      },
+      "embedding_preview": [
+        -0.06362980604171753,
+        0.0173448845744133,
+        -0.07697280496358871,
+        0.08051595091819763,
+        -0.10534302145242691,
+        0.004562911577522755,
+        0.053588755428791046,
+        0.05175754800438881
+      ],
+      "embedding_dim": 384
+    },
+    {
+      "id": "local_query_1_5_2__codeql_libraries_codeql_cpp-all_6_0_0_upgrades_0f0a390468a5eb43d1dc72937c028070b106bf53_aggregate_field_init_ql",
+      "document": "# aggregate_field_init.ql\n\n**Type**: query\n**Path**: 1.5.2/.codeql/libraries/codeql/cpp-all/6.0.0/upgrades/0f0a390468a5eb43d1dc72937c028070b106bf53/aggregate_field_init.ql\n**Category**: general\n\n\n```codeql\nclass Expr extends @expr {\n  string toString() { none() }\n}\n\nclass AggregateLiteral extends Expr, @aggregateliteral {\n  override string toString() { none() }\n}\n\nclass MemberVariable extends @membervariable {\n  string toString() { none() }\n}\n\nfrom AggregateLiteral aggregate, Expr initializer, MemberVariable field, int position\nwhere aggregate_field_init(aggregate, initializer, field, position)\nselect aggregate, initializer, field, position, false\n\n```",
+      "metadata": {
+        "category": "general",
+        "file_path": "/opt/codeql-bundle-2.23.3/codeql/qlpacks/codeql/cpp-queries/1.5.2/.codeql/libraries/codeql/cpp-all/6.0.0/upgrades/0f0a390468a5eb43d1dc72937c028070b106bf53/aggregate_field_init.ql",
+        "relative_path": "1.5.2/.codeql/libraries/codeql/cpp-all/6.0.0/upgrades/0f0a390468a5eb43d1dc72937c028070b106bf53/aggregate_field_init.ql",
+        "source": "local_codeql",
+        "type": "query"
+      },
+      "embedding_preview": [
+        -0.015073671005666256,
+        0.02177690900862217,
+        -0.022892359644174576,
+        0.05301288142800331,
+        -0.10520578175783157,
+        0.05455904081463814,
+        0.03390365466475487,
+        0.0674644485116005
+      ],
+      "embedding_dim": 384
+    },
+    {
+      "id": "local_query_1_5_2_Architecture_General Class-Level Information_HubClasses_ql",
+      "document": "# HubClasses.ql\n\n**Type**: query\n**Path**: 1.5.2/Architecture/General Class-Level Information/HubClasses.ql\n**Category**: general\n\n**Name**: Hub classes\n**Description**: Shows coupling between classes. Large, red, boxes are hub types that depend on many other classes\n\n```codeql\n/**\n * @name Hub classes\n * @description Shows coupling between classes. Large, red, boxes are hub types that depend on many other classes\n *              and are depended on by many other classes.\n * @kind table\n * @id cpp/architecture/hub-classes\n * @treemap.warnOn highValues\n * @tags maintainability\n */\n\nimport cpp\n\nfrom Class c\nwhere c.fromSource()\nselect c as class_, c.getMetrics().getAfferentCoupling() as afferentCoupling,\n  c.getMetrics().getEfferentSourceCoupling() as efferentCoupling order by afferentCoupling desc\n\n```",
+      "metadata": {
+        "relative_path": "1.5.2/Architecture/General Class-Level Information/HubClasses.ql",
+        "source": "local_codeql",
+        "tags": "maintainability",
+        "category": "general",
+        "type": "query",
+        "kind": "table",
+        "name": "Hub classes",
+        "description": "Shows coupling between classes. Large, red, boxes are hub types that depend on many other classes",
+        "file_path": "/opt/codeql-bundle-2.23.3/codeql/qlpacks/codeql/cpp-queries/1.5.2/Architecture/General Class-Level Information/HubClasses.ql"
+      },
+      "embedding_preview": [
+        0.04813799262046814,
+        0.022929776459932327,
+        -0.017014220356941223,
+        0.049035314470529556,
+        -0.013977576047182083,
+        0.014524403028190136,
+        -0.029267212375998497,
+        0.0025508743710815907
+      ],
+      "embedding_dim": 384
+    }
+  ]
+}

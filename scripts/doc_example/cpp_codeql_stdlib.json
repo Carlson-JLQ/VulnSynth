@@ -1,0 +1,121 @@
+{
+  "collection": "cpp_codeql_stdlib",
+  "total_count": 10610,
+  "sample_size": 5,
+  "items": [
+    {
+      "id": "cpp_codeql_stdlib_a17200e1d96c",
+      "document": "# Module Make\n\nURL: https://codeql.github.com/codeql-standard-libraries/cpp/codeql/util/FileSystem.qll/module.FileSystem$Make.html\n\nMakeCodeQL library for C/C++codeql/cpp-all 9.0.0  (changelog, source)IndexSearchFor other CodeQL resources, including tutorials and examples, see the CodeQL documentation.MakeImport pathClassesModulesParametersModule FileSystemModulesIdeContextualMakeType signaturesFileSigModule signaturesInputSigModule MakeProvides a class hierarchy for working with files and folders.\nImport pathimport codeql.util.FileSystemClassesContainerA file or folder.\nFileA file.\nFolderA folder.\nModulesFolderProvides logic related to Folders.\nParametersInputInputSigCopyright 2026 GitHub Software UK Ltd.Privacy Statement",
+      "metadata": {
+        "url": "https://codeql.github.com/codeql-standard-libraries/cpp/codeql/util/FileSystem.qll/module.FileSystem$Make.html",
+        "type": "documentation",
+        "doc_type": "cpp_stdlib",
+        "language": "cpp",
+        "source": "codeql_docs"
+      },
+      "embedding_preview": [
+        -0.08771276473999023,
+        0.0013653300702571869,
+        -0.09394080191850662,
+        0.05547463521361351,
+        -0.06595572084188461,
+        -0.024754395708441734,
+        0.025498131290078163,
+        0.06744349002838135
+      ],
+      "embedding_dim": 384
+    },
+    {
+      "id": "cpp_codeql_stdlib_c4e8172ccd72_example_0",
+      "document": "Code Example from Class BuiltInOperationIsRefArray:\n\n```codeql\narray<int>^ x = gcnew array<int>(10);\nbool b = __is_ref_array(array<int>);\n```",
+      "metadata": {
+        "type": "code_example",
+        "example_language": "codeql",
+        "source": "codeql_docs",
+        "language": "cpp",
+        "url": "https://codeql.github.com/codeql-standard-libraries/cpp/semmle/code/cpp/exprs/BuiltInOperations.qll/type.BuiltInOperations$BuiltInOperationIsRefArray.html",
+        "parent_title": "Class BuiltInOperationIsRefArray",
+        "doc_type": "cpp_stdlib"
+      },
+      "embedding_preview": [
+        0.009301704354584217,
+        0.03192507475614548,
+        -0.11290477961301804,
+        0.0163520947098732,
+        -0.11388792097568512,
+        -0.018236828967928886,
+        0.08542483299970627,
+        -0.027323590591549873
+      ],
+      "embedding_dim": 384
+    },
+    {
+      "id": "cpp_codeql_stdlib_3c5bf72e69f3",
+      "document": "# Member predicate BuiltInVarArg::getAPrimaryQlClass\n\nURL: https://codeql.github.com/codeql-standard-libraries/cpp/semmle/code/cpp/exprs/BuiltInOperations.qll/predicate.BuiltInOperations$BuiltInVarArg$getAPrimaryQlClass.0.html\n\ngetAPrimaryQlClassCodeQL library for C/C++codeql/cpp-all 9.0.0  (changelog, source)IndexSearchFor other CodeQL resources, including tutorials and examples, see the CodeQL documentation.getAPrimaryQlClassClass BuiltInVarArgPredicatesgetAPrimaryQlClassgetVAListtoStringInherited predicatesfindRootCausefromSourcegetAChildgetAFalseSuccessorgetAPredecessorgetASuccessorgetATrueSuccessorgetActualTypegetAnImplicitDestructorCallgetBasicBlockgetChildgetControlFlowScopegetConversiongetConversionStringgetEnclosingBlockgetEnclosingDeclarationgetEnclosingElementgetEnclosingFunctiongetEnclosingStmtgetEnclosingVariablegetExplicitlyConvertedgetFilegetFullyConvertedgetImplicitDestructorCallgetImplicitlyConvertedgetLocationgetNumChildgetParentgetParentScopegetParentWithConversionsgetPrecedencegetPrimaryQlClassesgetTypegetUnconvertedgetUnderlyingTypegetUnspecifiedTypegetValuegetValueCategoryStringgetValueTexthasChildhasConversionhasExplicitConversionhasImplicitConversionhasLValueToRValueConversionisAffectedByMacroisAffectedByMacroisCompilerGeneratedisConditionisConstantisFromTemplateInstantiationisFromUninstantiatedTemplateisGLValueCategoryisInMacroExpansionisLValueisLValueCategoryisPRValueCategoryisParenthesisedisPureisRValueCategoryisUnevaluatedisXValueCategorymayBeGloballyImpuremayBeImpureMember predicate BuiltInVarArg::getAPrimaryQlClassGets the name of a primary CodeQL class to which this element belongs.\nFor most elements, this is simply the most precise syntactic category to\nwhich they belong; for example, AddExpr is a primary class, but\nBinaryOperation is not.\nThis predicate can have multiple results if multiple primary classes match.\nFor some elements, this predicate may not have a result.\nstring getAPrimaryQlClass()Copyright 2026 GitHub Software UK Ltd.Privacy Statement",
+      "metadata": {
+        "source": "codeql_docs",
+        "doc_type": "cpp_stdlib",
+        "type": "documentation",
+        "url": "https://codeql.github.com/codeql-standard-libraries/cpp/semmle/code/cpp/exprs/BuiltInOperations.qll/predicate.BuiltInOperations$BuiltInVarArg$getAPrimaryQlClass.0.html",
+        "language": "cpp"
+      },
+      "embedding_preview": [
+        -0.0010815463028848171,
+        0.04418247938156128,
+        -0.015393001027405262,
+        0.01778010092675686,
+        -0.04953799769282341,
+        0.03462887927889824,
+        0.05777006223797798,
+        -0.009489725343883038
+      ],
+      "embedding_dim": 384
+    },
+    {
+      "id": "cpp_codeql_stdlib_b66c7b29d187",
+      "document": "# Member predicate IRErrorType::getCanonicalLanguageType\n\nURL: https://codeql.github.com/codeql-standard-libraries/cpp/semmle/code/cpp/ir/implementation/IRType.qll/predicate.IRType$IRErrorType$getCanonicalLanguageType.0.html\n\ngetCanonicalLanguageTypeCodeQL library for C/C++codeql/cpp-all 9.0.0  (changelog, source)IndexSearchFor other CodeQL resources, including tutorials and examples, see the CodeQL documentation.getCanonicalLanguageTypeClass IRErrorTypePredicatesgetByteSizegetCanonicalLanguageTypetoStringInherited predicatesgetIdentityStringMember predicate IRErrorType::getCanonicalLanguageTypeGets a single instance of LanguageType that maps to this IRType.\nLanguageType getCanonicalLanguageType()Copyright 2026 GitHub Software UK Ltd.Privacy Statement",
+      "metadata": {
+        "language": "cpp",
+        "source": "codeql_docs",
+        "url": "https://codeql.github.com/codeql-standard-libraries/cpp/semmle/code/cpp/ir/implementation/IRType.qll/predicate.IRType$IRErrorType$getCanonicalLanguageType.0.html",
+        "doc_type": "cpp_stdlib",
+        "type": "documentation"
+      },
+      "embedding_preview": [
+        0.0044210851192474365,
+        -0.0094592971727252,
+        0.020841920748353004,
+        0.05021311715245247,
+        -0.010400430299341679,
+        0.057965461164712906,
+        0.08527041226625443,
+        0.015122147276997566
+      ],
+      "embedding_dim": 384
+    },
+    {
+      "id": "cpp_codeql_stdlib_9c8d7e070d35_example_0",
+      "document": "Code Example from Class TaintInheritingContent:\n\n```codeql\nstruct Container { int field; }\n```",
+      "metadata": {
+        "language": "cpp",
+        "type": "code_example",
+        "doc_type": "cpp_stdlib",
+        "url": "https://codeql.github.com/codeql-standard-libraries/cpp/semmle/code/cpp/ir/dataflow/FlowSteps.qll/type.FlowSteps$TaintInheritingContent.html",
+        "example_language": "codeql",
+        "source": "codeql_docs",
+        "parent_title": "Class TaintInheritingContent"
+      },
+      "embedding_preview": [
+        0.05670247972011566,
+        0.0343773290514946,
+        -0.0567561574280262,
+        0.017122579738497734,
+        -0.0701899453997612,
+        -0.02132340520620346,
+        0.13316704332828522,
+        0.027352260425686836
+      ],
+      "embedding_dim": 384
+    }
+  ]
+}

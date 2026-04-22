@@ -1,0 +1,147 @@
+{
+  "collection": "cwe_data",
+  "total_count": 1453,
+  "sample_size": 5,
+  "items": [
+    {
+      "id": "cwe_weakness_1099",
+      "document": "# CWE-1099: Inconsistent Naming Conventions for Identifiers\n**Type**: Weakness\n**Abstraction**: Base\n**Structure**: Simple\n**Status**: Incomplete\n\n## Description\nThe product's code, documentation, or other artifacts do not\n\t\t\t\t\tconsistently use the same naming conventions for variables, callables, groups of\n\t\t\t\t\trelated callables, I/O capabilities, data types, file names, or similar types of\n\t\t\t\t\telements.\n\n## Common Consequences\n- **Scope**: Other\n  **Impact**: Reduce Maintainability\n  **Note**: This issue makes it more difficult to understand and/or maintain the product due to inconsistencies, which indirectly affects security by making it more difficult or time-consuming to find and/or fix vulnerabilities.  It also might make it easier to introduce vulnerabilities.\n",
+      "metadata": {
+        "parent_ids": "1078",
+        "source": "cwe_mitre",
+        "child_ids": "",
+        "has_consequences": true,
+        "structure": "Simple",
+        "cwe_type": "weakness",
+        "status": "Incomplete",
+        "abstraction": "Base",
+        "cwe_id": "1099",
+        "has_mitigations": false,
+        "name": "Inconsistent Naming Conventions for Identifiers",
+        "relationship_count": 1
+      },
+      "embedding_preview": [
+        -0.11988702416419983,
+        0.013405046425759792,
+        0.009434638544917107,
+        -0.04670824483036995,
+        -0.0023891341406852007,
+        -0.004181071650236845,
+        -0.029448827728629112,
+        0.13047634065151215
+      ],
+      "embedding_dim": 384
+    },
+    {
+      "id": "cwe_weakness_1332",
+      "document": "# CWE-1332: Improper Handling of Faults that Lead to Instruction Skips\n**Type**: Weakness\n**Abstraction**: Base\n**Structure**: Simple\n**Status**: Stable\n\n## Description\nThe device is missing or incorrectly implements circuitry or sensors that detect and mitigate the skipping of security-critical CPU instructions when they occur.\n\n## Extended Description\nThe operating conditions of hardware may change\n              in ways that cause unexpected behavior to occur,\n              including the skipping of security-critical CPU\n              instructions. Generally, this can occur due to\n              electrical disturbances or when the device operates\n              outside of its expected conditions. \n\t\t\t   In practice, application code may contain\n\t\t\t  conditional branches that are security-sensitive (e.g.,\n\t\t\t  accepting or rejecting a user-provided password). These\n\t\t\t  conditional branches are typically implemented by a\n\t\t\t  single conditional branch instruction in the program\n\t\t\t  binary which, if skipped, may lead to effectively\n\t\t\t  flipping the branch condition - i.e., causing the wrong\n\t\t\t  security-sensitive branch to be taken. This affects\n\t\t\t  processes such as firmware authentication, password\n\t\t\t  verification, and other security-sensitive decision\n\t\t\t  points. \n\t\t\t   Attackers can use fault injection techniques to\n\t\t\t  alter the operating conditions of hardware so that\n\t\t\t  security-critical instructions are skipped more\n\t\t\t  frequently or more reliably than they would in a\n\t\t\t  \"natural\" setting.\n\n## Common Consequences\n- **Scope**: Confidentiality\n  **Impact**: Bypass Protection Mechanism\n  **Note**: Depending on the context, instruction skipping can\n                        have a broad range of consequences related to the\n                        generic bypassing of security critical code.\n\n## Potential Mitigations\n- **Phase**: Architecture and Design\n  **Description**: Design strategies for ensuring safe failure if\n                        inputs, such as Vcc, are modified out of acceptable\n                        ranges.\n\n- **Phase**: Architecture and Design\n  **Description**: Design strategies for ensuring safe behavior if\n                        instructions attempt to be skipped.\n\n- **Phase**: Architecture and Design\n  **Description**: Identify mission critical secrets that should\n                          be wiped if faulting is detected, and design a\n                          mechanism to do the deletion.\n\n- **Phase**: Implementation\n  **Description**: Add redundancy by performing an operation\n                          multiple times, either in space or time, and perform\n                          majority voting. Additionally, make conditional\n                          instruction timing unpredictable.\n\n- **Phase**: Implementation\n  **Description**: Use redundant operations or canaries to\n                          detect and respond to faults.\n\n- **Phase**: Implementation\n  **Description**: Ensure that fault mitigations are strong enough\n                        in practice. For example, a low power detection\n                        mechanism that takes 50 clock cycles to trigger at lower\n                        voltages may be an insufficient security mechanism if\n                        the instruction counter has already progressed with no\n                        other CPU activity occurring.\n",
+      "metadata": {
+        "source": "cwe_mitre",
+        "abstraction": "Base",
+        "cwe_id": "1332",
+        "has_mitigations": true,
+        "relationship_count": 1,
+        "has_consequences": true,
+        "status": "Stable",
+        "parent_ids": "1384",
+        "cwe_type": "weakness",
+        "name": "Improper Handling of Faults that Lead to Instruction Skips",
+        "child_ids": "",
+        "structure": "Simple"
+      },
+      "embedding_preview": [
+        0.0017692637629806995,
+        0.020382096990942955,
+        0.03862879052758217,
+        -0.001416676794178784,
+        -0.0108126699924469,
+        -0.07406146079301834,
+        0.006630629301071167,
+        0.05863969400525093
+      ],
+      "embedding_dim": 384
+    },
+    {
+      "id": "cwe_weakness_440",
+      "document": "# CWE-440: Expected Behavior Violation\n**Type**: Weakness\n**Abstraction**: Base\n**Structure**: Simple\n**Status**: Draft\n\n## Description\nA feature, API, or function does not perform according to its specification.\n\n## Common Consequences\n- **Scope**: Other\n  **Impact**: Quality Degradation\n",
+      "metadata": {
+        "child_ids": "1434",
+        "parent_ids": "684",
+        "name": "Expected Behavior Violation",
+        "structure": "Simple",
+        "abstraction": "Base",
+        "has_mitigations": false,
+        "relationship_count": 2,
+        "source": "cwe_mitre",
+        "has_consequences": true,
+        "cwe_id": "440",
+        "cwe_type": "weakness",
+        "status": "Draft"
+      },
+      "embedding_preview": [
+        -0.03924641013145447,
+        0.040518924593925476,
+        0.05293603241443634,
+        0.03063010796904564,
+        0.03824431076645851,
+        -0.09155125170946121,
+        -0.07031658291816711,
+        0.07699746638536453
+      ],
+      "embedding_dim": 384
+    },
+    {
+      "id": "cwe_weakness_832",
+      "document": "# CWE-832: Unlock of a Resource that is not Locked\n**Type**: Weakness\n**Abstraction**: Base\n**Structure**: Simple\n**Status**: Incomplete\n\n## Description\nThe product attempts to unlock a resource that is not locked.\n\n## Extended Description\nDepending on the locking functionality, an unlock of a non-locked resource might cause memory corruption or other modification to the resource (or its associated metadata that is used for tracking locks).\n\n## Common Consequences\n- **Scope**: Integrity\n  **Impact**: DoS: Crash, Exit, or Restart\n  **Note**: Depending on the locking being used, an unlock operation might not have any adverse effects. When effects exist, the most common consequence will be a corruption of the state of the product, possibly leading to a crash or exit; depending on the implementation of the unlocking, memory corruption or code execution could occur.\n",
+      "metadata": {
+        "has_mitigations": false,
+        "abstraction": "Base",
+        "relationship_count": 1,
+        "structure": "Simple",
+        "parent_ids": "667",
+        "child_ids": "",
+        "source": "cwe_mitre",
+        "cwe_type": "weakness",
+        "name": "Unlock of a Resource that is not Locked",
+        "has_consequences": true,
+        "status": "Incomplete",
+        "cwe_id": "832"
+      },
+      "embedding_preview": [
+        -0.11664950102567673,
+        0.00400439603254199,
+        -0.027039214968681335,
+        -0.04378264397382736,
+        0.04602273181080818,
+        0.019533073529601097,
+        0.03351084142923355,
+        0.027334339916706085
+      ],
+      "embedding_dim": 384
+    },
+    {
+      "id": "cwe_category_1218",
+      "document": "# CWE-1218: Memory Buffer Errors\n**Type**: Category\n**Status**: Draft\n\n## Summary\nWeaknesses in this category are related to the handling of memory buffers within a software system.\n",
+      "metadata": {
+        "cwe_type": "category",
+        "source": "cwe_mitre",
+        "status": "Draft",
+        "member_ids": "",
+        "name": "Memory Buffer Errors",
+        "cwe_id": "1218",
+        "member_count": 0
+      },
+      "embedding_preview": [
+        0.0016951243160292506,
+        0.03160886466503143,
+        -0.035125501453876495,
+        -0.005738211330026388,
+        -0.03482937812805176,
+        -0.040987707674503326,
+        0.040089793503284454,
+        0.1157320961356163
+      ],
+      "embedding_dim": 384
+    }
+  ]
+}

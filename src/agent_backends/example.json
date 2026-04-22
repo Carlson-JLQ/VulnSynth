@@ -1,0 +1,20 @@
+{
+    "sources":[
+        {
+            "path": "keycloak/HttpServletRequest.java ",
+            "class":"HttpServletRequest",
+            "method":"getHeader",
+            "signature":"public String getHeader(String name)"
+        }
+    ],
+    "sinks":[
+        ....
+    ],
+    "sanitizers":[
+       ....
+    ],
+    "Taint Steps":[
+        ....
+    ],
+    "pattern_summary":"...."
+}

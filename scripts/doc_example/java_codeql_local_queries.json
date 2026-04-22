@@ -1,0 +1,133 @@
+{
+  "collection": "java_codeql_local_queries",
+  "total_count": 1669,
+  "sample_size": 5,
+  "items": [
+    {
+      "id": "local_query_1_8_2_experimental_quantum_Analysis_InsecureNonceSource_ql",
+      "document": "# InsecureNonceSource.ql\n\n**Type**: query\n**Path**: 1.8.2/experimental/quantum/Analysis/InsecureNonceSource.ql\n**Category**: general\n\n**Name**: Insecure nonce at a cipher operation\n**Description**: A nonce is generated from a source that is not secure. This can lead to\n\n```codeql\n/**\n * @name Insecure nonce at a cipher operation\n * @id java/quantum/insecure-nonce\n * @description A nonce is generated from a source that is not secure. This can lead to\n *              vulnerabilities such as replay attacks or key recovery.\n * @kind problem\n * @problem.severity error\n * @precision high\n * @tags quantum\n *       experimental\n */\n\nimport experimental.quantum.Language\n\npredicate isInsecureNonceSource(Crypto::NonceArtifactNode n, Crypto::NodeBase src) {\n  src = n.getSourceNode() and\n  not src.asElement() instanceof SecureRandomnessInstance\n}\n\nfrom Crypto::KeyOperationNode op, Crypto::NodeBase src\nwhere isInsecureNonceSource(op.getANonce(), src)\nselect op, \"Operation uses insecure nonce source $@\", src, src.toString()\n\n```",
+      "metadata": {
+        "name": "Insecure nonce at a cipher operation",
+        "kind": "problem",
+        "category": "general",
+        "tags": "quantum",
+        "relative_path": "1.8.2/experimental/quantum/Analysis/InsecureNonceSource.ql",
+        "precision": "high",
+        "description": "A nonce is generated from a source that is not secure. This can lead to",
+        "file_path": "/opt/codeql-bundle-2.23.3/codeql/qlpacks/codeql/java-queries/1.8.2/experimental/quantum/Analysis/InsecureNonceSource.ql",
+        "source": "local_codeql",
+        "type": "query"
+      },
+      "embedding_preview": [
+        -0.10067124664783478,
+        0.040733639150857925,
+        -0.09509550780057907,
+        0.05778200179338455,
+        -0.08735129982233047,
+        -0.03826281800866127,
+        0.020552411675453186,
+        -0.03499903157353401
+      ],
+      "embedding_dim": 384
+    },
+    {
+      "id": "cwe_query_1_8_2_experimental_Security_CWE_CWE-555_PasswordInConfigurationFile_ql",
+      "document": "# PasswordInConfigurationFile.ql\n\n**Type**: query\n**Path**: 1.8.2/experimental/Security/CWE/CWE-555/PasswordInConfigurationFile.ql\n**Category**: security\n\n**CWE**: CWE-555\n**Name**: Password in configuration file\n**Description**: Finds passwords in configuration files.\n\n```codeql\n/**\n * @name Password in configuration file\n * @description Finds passwords in configuration files.\n * @kind problem\n * @problem.severity warning\n * @precision medium\n * @id java/password-in-configuration\n * @tags security\n *       experimental\n *       external/cwe/cwe-555\n *       external/cwe/cwe-256\n *       external/cwe/cwe-260\n */\n\nimport java\n\n/** Holds if the attribute value is not a cleartext password */\nbindingset[value]\npredicate isNotPassword(string value) {\n  value = \"\" // Empty string\n  or\n  value.regexpMatch(\"\\\\$\\\\{.*\\\\}\") // Variable placeholder ${password}\n  or\n  value.matches(\"%=\") // A basic check of encrypted passwords ending with padding characters, which could be improved to be more accurate.\n}\n\n/** Holds if the attribute value has an embedded password */\nbindingset[value]\npredicate hasEmbeddedPassword(string value) {\n  exists(string password |\n    password = value.regexpCapture(\"(?is).*(pwd|password)\\\\s*=([^;:,]*).*\", 2).trim() and\n    not isNotPassword(password)\n  )\n}\n\ndeprecated query predicate problems(XmlAttribute nameAttr, string message) {\n  (\n    nameAttr.getName().toLowerCase() in [\"password\", \"pwd\"] and\n    not isNotPassword(nameAttr.getValue().trim()) // Attribute name \"password\" or \"pwd\"\n    or\n    exists(\n      XmlAttribute valueAttr // name/value pair like <property name=\"password\" value=\"mysecret\"/>\n    |\n      valueAttr.getElement() = nameAttr.getElement() and\n      nameAttr.getName().toLowerCase() = \"name\" and\n      nameAttr.getValue().toLowerCase() in [\"password\", \"pwd\"] and\n      valueAttr.getName().toLowerCase() = \"value\" and\n      not isNotPassword(valueAttr.getValue().trim())\n    )\n    or\n    hasEmbeddedPassword(nameAttr.getValue().trim()) // Attribute value matches password pattern\n  ) and\n  message = \"Avoid plaintext passwords in configuration files.\"\n}\n\n```",
+      "metadata": {
+        "source": "local_codeql_cwe",
+        "relative_path": "1.8.2/experimental/Security/CWE/CWE-555/PasswordInConfigurationFile.ql",
+        "category": "security",
+        "file_path": "/opt/codeql-bundle-2.23.3/codeql/qlpacks/codeql/java-queries/1.8.2/experimental/Security/CWE/CWE-555/PasswordInConfigurationFile.ql",
+        "precision": "medium",
+        "description": "Finds passwords in configuration files.",
+        "kind": "problem",
+        "cwe_number": "555",
+        "type": "query",
+        "name": "Password in configuration file",
+        "tags": "security"
+      },
+      "embedding_preview": [
+        -0.0372416190803051,
+        0.034726813435554504,
+        -0.06391952186822891,
+        -0.01485102716833353,
+        -0.07826819270849228,
+        0.014082074165344238,
+        0.08847153931856155,
+        0.034527737647295
+      ],
+      "embedding_dim": 384
+    },
+    {
+      "id": "cwe_query_1_8_2__codeql_libraries_codeql_java-all_7_7_2_semmle_code_java_security_CsrfUnprotectedRequestTypeQuery_qll",
+      "document": "# CsrfUnprotectedRequestTypeQuery.qll\n\n**Type**: library\n**Path**: 1.8.2/.codeql/libraries/codeql/java-all/7.7.2/semmle/code/java/security/CsrfUnprotectedRequestTypeQuery.qll\n**Category**: security\n\n\n```codeql\n/** Provides classes and predicates to reason about CSRF vulnerabilities due to use of unprotected HTTP request types. */\n\nimport java\nprivate import semmle.code.java.frameworks.spring.SpringController\nprivate import semmle.code.java.frameworks.stapler.Stapler\nprivate import semmle.code.java.frameworks.MyBatis\nprivate import semmle.code.java.frameworks.Jdbc\nprivate import semmle.code.java.dataflow.ExternalFlow\nprivate import semmle.code.java.dispatch.VirtualDispatch\nprivate import semmle.code.java.dataflow.TaintTracking\nimport CallGraph\n\n/** A method that is not protected from CSRF by default. */\nabstract class CsrfUnprotectedMethod extends Method { }\n\n/**\n * A Spring request mapping method that is not protected from CSRF by default.\n *\n * https://docs.spring.io/spring-security/reference/features/exploits/csrf.html#csrf-protection-read-only\n */\nprivate class SpringCsrfUnprotectedMethod extends CsrfUnprotectedMethod instanceof SpringRequestMappingMethod\n{\n  SpringCsrfUnprotectedMethod() {\n    this.hasAnnotation(\"org.springframework.web.bind.annotation\", \"GetMapping\")\n    or\n    this.hasAnnotation(\"org.springframework.web.bind.annotation\", \"RequestMapping\") and\n    (\n      this.getMethodValue() = [\"GET\", \"HEAD\"]\n      or\n      // If no request type is specified with `@RequestMapping`, then all request types\n      // are possible, so we treat this as unsafe; example: @RequestMapping(value = \"test\").\n      not exists(this.getMethodValue())\n    )\n  }\n}\n\n/**\n * A Stapler web method that is not protected from CSRF by default.\n *\n * https://www.jenkins.io/doc/developer/security/form-validation/#protecting-from-csrf\n */\nprivate class StaplerCsrfUnprotectedMethod extends CsrfUnprotectedMethod instanceof StaplerWebMethod\n{\n  StaplerCsrfUnprotectedMethod() {\n    not this.hasAnnotation(\"org.kohsuke.stapler.interceptor\", \"RequirePOST\") and\n    // Jenkins only explicitly protects against CSRF for POST requests, but we\n    // also exclude PUT and DELETE since these request types are only exploitable\n    // if there is a CORS issue.\n    not this.hasAnnotation(\"org.kohsuke.stapler.verb\", [\"POST\", \"PUT\", \"DELETE\"])\n  }\n}\n\n/** Gets a word that is interesting because it may indicate a state change. */\nprivate string getAnInterestingWord() {\n  result =\n    [\n      \"post\", \"put\", \"patch\", \"delete\", \"remove\", \"create\", \"add\", \"update\", \"edit\", \"publish\",\n      \"unpublish\", \"fill\", \"move\", \"transfer\", \"logout\", \"login\", \"access\", \"connect\", \"connection\",\n      \"register\", \"submit\"\n    ]\n}\n\n/**\n * Gets the regular expression used for matching strings that look like they\n * contain an interesting word.\n */\nprivate string getInterestingWordRegex() {\n  result = \"(^|\\\\w+(?=[A-Z]))((?i)\" + concat(getAnInterestingWord(), \"|\") + \")($|(?![a-z])\\\\w+)\"\n}\n\n/** Gets a word that is uninteresting because it likely does not indicate a state change. */\nprivate string getAnUninterestingWord() {\n  result = [\"get\", \"show\", \"view\", \"list\", \"query\", \"find\"]\n}\n\n/**\n * Gets the regular expression used for matching strings that look like they\n * contain an uninteresting word.\n */\nprivate string getUninterestingWordRegex() {\n  result = \"^(\" + concat(getAnUninterestingWord(), \"|\") + \")(?![a-z])\\\\w*\"\n}\n\n/** A method that appears to change application state based on its name. */\nprivate class NameBasedStateChangeMethod extends Method {\n  NameBasedStateChangeMethod() {\n    this.getName().regexpMatch(getInterestingWordRegex()) and\n    not this.getName().regexpMatch(getUninterestingWordRegex())\n  }\n}\n\n/** A method that updates a database. */\nabstract class DatabaseUpdateMethod extends Method { }\n\n/** A MyBatis method that updates a database. */\nprivate class MyBatisDatabaseUpdateMethod extends DatabaseUpdateMethod {\n  MyBatisDatabaseUpdateMethod() {\n    exists(MyBatisMapperSqlOperation mapperXml |\n      (\n        mapperXml instanceof MyBatisMapperInsert or\n        mapperXml instanceof MyBatisMapperUpdate or\n        mapperXml instanceof MyBatisMapperDelete\n      ) and\n      this = mapperXml.getMapperMethod()\n    )\n    or\n    exists(MyBatisSqlOperationAnnotationMethod m | this = m |\n      not m.getAnAnnotation().getType().hasQualifiedName(\"org.apache.ibatis.annotations\", \"Select\")\n    )\n    or\n    exists(Method m | this = m |\n      m.hasAnnotation(\"org.apache.ibatis.annotations\", [\"Delete\", \"Update\", \"Insert\"] + \"Provider\")\n    )\n  }\n}\n\n/** A method declared in `java.sql.PreparedStatement` that updates a database. */\nprivate class PreparedStatementDatabaseUpdateMethod extends DatabaseUpdateMethod {\n  PreparedStatementDatabaseUpdateMethod() {\n    this instanceof PreparedStatementExecuteUpdateMethod or\n    this instanceof PreparedStatementExecuteLargeUpdateMethod\n  }\n}\n\n/** A method found via the sql-injection sink models which may update a database. */\nprivate class SqlInjectionDatabaseUpdateMethod extends DatabaseUpdateMethod {\n  SqlInjectionDatabaseUpdateMethod() {\n    exists(DataFlow::Node n | this = n.asExpr().(Argument).getCall().getCallee() |\n      sinkNode(n, \"sql-injection\") and\n      // do not include `executeQuery` since it is typically used with a select statement\n      this.hasName([\n          \"delete\", \"insert\", \"update\", \"batchUpdate\", \"executeUpdate\", \"executeLargeUpdate\",\n          \"execute\"\n        ])\n    )\n  }\n}\n\n/**\n * A taint-tracking configuration for reasoning about SQL statements that update\n * a database via a call to an `execute` method.\n */\nprivate module SqlExecuteConfig implements DataFlow::ConfigSig {\n  predicate isSource(DataFlow::Node source) {\n    exists(StringLiteral sl | source.asExpr() = sl |\n      sl.getValue().regexpMatch(\"^(?i)(insert|update|delete).*\")\n    )\n  }\n\n  predicate isSink(DataFlow::Node sink) {\n    exists(Method m | m = sink.asExpr().(Argument).getCall().getCallee() |\n      m instanceof SqlInjectionDatabaseUpdateMethod and\n      m.hasName(\"execute\")\n    )\n  }\n}\n\n/**\n * Tracks flow from SQL statements that update a database to the argument of\n * an `execute` method call.\n */\nprivate module SqlExecuteFlow = TaintTracking::Global<SqlExecuteConfig>;\n\n/** Provides classes and predicates representing call graph paths. */\nmodule CallGraph {\n  private newtype TCallPathNode =\n    TMethod(Method m) or\n    TCall(Call c)\n\n  /** A node in a call path graph */\n  class CallPathNode extends TCallPathNode {\n    /** Gets the method corresponding to this `CallPathNode`, if any. */\n    Method asMethod() { this = TMethod(result) }\n\n    /** Gets the call corresponding to this `CallPathNode`, if any. */\n    Call asCall() { this = TCall(result) }\n\n    /** Gets the string representation of this `CallPathNode`. */\n    string toString() {\n      result = this.asMethod().toString()\n      or\n      result = this.asCall().toString()\n    }\n\n    private CallPathNode getACallee() {\n      [viableCallable(this.asCall()), this.asCall().getCallee()] = result.asMethod()\n    }\n\n    pragma[nomagic]\n    private predicate canTargetDatabaseUpdateMethod() {\n      exists(CallPathNode p |\n        p = this.getACallee() and\n        p.asMethod() instanceof DatabaseUpdateMethod\n      )\n    }\n\n    /** Gets a successor node of this `CallPathNode`, if any. */\n    CallPathNode getASuccessor() {\n      this.asMethod() = result.asCall().getEnclosingCallable()\n      or\n      result = this.getACallee() and\n      (\n        this.canTargetDatabaseUpdateMethod()\n        implies\n        result.asMethod() instanceof DatabaseUpdateMethod\n      )\n    }\n\n    /** Gets the location of this `CallPathNode`. */\n    Location getLocation() {\n      result = this.asMethod().getLocation()\n      or\n      result = this.asCall().getLocation()\n    }\n  }\n\n  /** Holds if `pred` has a successor node `succ`. */\n  predicate edges(CallPathNode pred, CallPathNode succ) { pred.getASuccessor() = succ }\n}\n\n/** Holds if `sourceMethod` is an unprotected request handler. */\nprivate predicate source(CallPathNode sourceMethod) {\n  sourceMethod.asMethod() instanceof CsrfUnprotectedMethod\n}\n\n/** Holds if `sinkMethodCall` updates a database. */\nprivate predicate sink(CallPathNode sinkMethodCall) {\n  exists(CallPathNode sinkMethod |\n    sinkMethod.asMethod() instanceof DatabaseUpdateMethod and\n    sinkMethodCall.getASuccessor() = sinkMethod and\n    // exclude SQL `execute` calls that do not update database\n    if\n      sinkMethod.asMethod() instanceof SqlInjectionDatabaseUpdateMethod and\n      sinkMethod.asMethod().hasName(\"execute\")\n    then SqlExecuteFlow::flowToExpr(sinkMethodCall.asCall().getAnArgument())\n    else any()\n  )\n}\n\nprivate predicate fwdFlow(CallPathNode n) {\n  source(n)\n  or\n  exists(CallPathNode mid | fwdFlow(mid) and CallGraph::edges(mid, n))\n}\n\nprivate predicate revFlow(CallPathNode n) {\n  fwdFlow(n) and\n  (\n    sink(n)\n    or\n    exists(CallPathNode mid | revFlow(mid) and CallGraph::edges(n, mid))\n  )\n}\n\n/**\n * Holds if `pred` has a successor node `succ` and this edge is in an\n * `unprotectedStateChange` path.\n */\npredicate relevantEdge(CallPathNode pred, CallPathNode succ) {\n  CallGraph::edges(pred, succ) and revFlow(pred) and revFlow(succ)\n}\n\n/**\n * Holds if `sourceMethod` is an unprotected request handler that reaches a\n * `sinkMethodCall` that updates a database.\n */\nprivate predicate unprotectedDatabaseUpdate(CallPathNode sourceMethod, CallPathNode sinkMethodCall) =\n  doublyBoundedFastTC(relevantEdge/2, source/1, sink/1)(sourceMethod, sinkMethodCall)\n\n/**\n * Holds if `sourceMethod` is an unprotected request handler that appears to\n * change application state based on its name.\n */\nprivate predicate unprotectedNameBasedStateChange(CallPathNode sourceMethod, CallPathNode sinkMethod) {\n  sourceMethod.asMethod() instanceof CsrfUnprotectedMethod and\n  sinkMethod.asMethod() instanceof NameBasedStateChangeMethod and\n  sinkMethod = sourceMethod and\n  // exclude any alerts that update a database\n  not unprotectedDatabaseUpdate(sourceMethod, _)\n}\n\n/**\n * Holds if `source` is an unprotected request handler that may\n * change an application's state.\n */\npredicate unprotectedStateChange(CallPathNode source, CallPathNode sink) {\n  unprotectedDatabaseUpdate(source, sink) or\n  unprotectedNameBasedStateChange(source, sink)\n}\n\n```",
+      "metadata": {
+        "file_path": "/opt/codeql-bundle-2.23.3/codeql/qlpacks/codeql/java-queries/1.8.2/.codeql/libraries/codeql/java-all/7.7.2/semmle/code/java/security/CsrfUnprotectedRequestTypeQuery.qll",
+        "type": "library",
+        "category": "security",
+        "relative_path": "1.8.2/.codeql/libraries/codeql/java-all/7.7.2/semmle/code/java/security/CsrfUnprotectedRequestTypeQuery.qll",
+        "source": "local_codeql_cwe"
+      },
+      "embedding_preview": [
+        -0.1142900139093399,
+        0.014080764725804329,
+        -0.11737415939569473,
+        -0.033157169818878174,
+        0.0325862281024456,
+        -0.03141847997903824,
+        0.04501520097255707,
+        -0.01969095505774021
+      ],
+      "embedding_dim": 384
+    },
+    {
+      "id": "local_query_1_8_2__codeql_libraries_codeql_java-all_7_7_2_semmle_code_java_dataflow_internal_rangeanalysis_SsaReadPositionCommon_qll",
+      "document": "# SsaReadPositionCommon.qll\n\n**Type**: library\n**Path**: 1.8.2/.codeql/libraries/codeql/java-all/7.7.2/semmle/code/java/dataflow/internal/rangeanalysis/SsaReadPositionCommon.qll\n**Category**: dataflow\n\n\n```codeql\n/**\n * Provides classes for representing a position at which an SSA variable is read.\n */\noverlay[local?]\nmodule;\n\nprivate import SsaReadPositionSpecific\nimport SsaReadPositionSpecific::Public\n\nprivate newtype TSsaReadPosition =\n  TSsaReadPositionBlock(BasicBlock bb) { bb = getAReadBasicBlock(_) } or\n  TSsaReadPositionPhiInputEdge(BasicBlock bbOrig, BasicBlock bbPhi) {\n    exists(SsaPhiNode phi | phi.hasInputFromBlock(_, bbOrig) and bbPhi = phi.getBasicBlock())\n  }\n\n/**\n * A position at which an SSA variable is read. This includes both ordinary\n * reads occurring in basic blocks and input to phi nodes occurring along an\n * edge between two basic blocks.\n */\nclass SsaReadPosition extends TSsaReadPosition {\n  /** Holds if `v` is read at this position. */\n  abstract predicate hasReadOfVar(SsaVariable v);\n\n  /** Gets a textual representation of this SSA read position. */\n  abstract string toString();\n}\n\n/** A basic block in which an SSA variable is read. */\nclass SsaReadPositionBlock extends SsaReadPosition, TSsaReadPositionBlock {\n  /** Gets the basic block corresponding to this position. */\n  BasicBlock getBlock() { this = TSsaReadPositionBlock(result) }\n\n  override predicate hasReadOfVar(SsaVariable v) { this.getBlock() = getAReadBasicBlock(v) }\n\n  override string toString() { result = \"block\" }\n}\n\n/**\n * An edge between two basic blocks where the latter block has an SSA phi\n * definition. The edge therefore has a read of an SSA variable serving as the\n * input to the phi node.\n */\nclass SsaReadPositionPhiInputEdge extends SsaReadPosition, TSsaReadPositionPhiInputEdge {\n  /** Gets the source of the edge. */\n  BasicBlock getOrigBlock() { this = TSsaReadPositionPhiInputEdge(result, _) }\n\n  /** Gets the target of the edge. */\n  BasicBlock getPhiBlock() { this = TSsaReadPositionPhiInputEdge(_, result) }\n\n  override predicate hasReadOfVar(SsaVariable v) { this.phiInput(_, v) }\n\n  /** Holds if `inp` is an input to `phi` along this edge. */\n  predicate phiInput(SsaPhiNode phi, SsaVariable inp) {\n    phi.hasInputFromBlock(inp, this.getOrigBlock()) and\n    this.getPhiBlock() = phi.getBasicBlock()\n  }\n\n  override string toString() { result = \"edge\" }\n}\n\n/**\n * Holds if `rix` is the number of input edges to `phi`.\n */\npredicate maxPhiInputRank(SsaPhiNode phi, int rix) {\n  rix = max(int r | rankedPhiInput(phi, _, _, r))\n}\n\n```",
+      "metadata": {
+        "source": "local_codeql",
+        "type": "library",
+        "relative_path": "1.8.2/.codeql/libraries/codeql/java-all/7.7.2/semmle/code/java/dataflow/internal/rangeanalysis/SsaReadPositionCommon.qll",
+        "file_path": "/opt/codeql-bundle-2.23.3/codeql/qlpacks/codeql/java-queries/1.8.2/.codeql/libraries/codeql/java-all/7.7.2/semmle/code/java/dataflow/internal/rangeanalysis/SsaReadPositionCommon.qll",
+        "category": "dataflow"
+      },
+      "embedding_preview": [
+        -0.03977527096867561,
+        -0.01557194348424673,
+        -0.08964964747428894,
+        -0.005095840431749821,
+        -0.11371639370918274,
+        0.023842737078666687,
+        0.06625977903604507,
+        0.03746438026428223
+      ],
+      "embedding_dim": 384
+    },
+    {
+      "id": "local_query_1_8_2_Frameworks_Spring_Violations of Best Practice_UseIdInsteadOfName_ql",
+      "document": "# UseIdInsteadOfName.ql\n\n**Type**: query\n**Path**: 1.8.2/Frameworks/Spring/Violations of Best Practice/UseIdInsteadOfName.ql\n**Category**: general\n\n**Name**: Use id instead of name\n**Description**: Using 'id' instead of 'name' to name a Spring bean enables the XML parser to perform\n\n```codeql\n/**\n * @name Use id instead of name\n * @description Using 'id' instead of 'name' to name a Spring bean enables the XML parser to perform\n *              additional checks.\n * @kind problem\n * @problem.severity recommendation\n * @precision low\n * @id java/spring/bean-id\n * @tags reliability\n *       maintainability\n *       frameworks/spring\n */\n\nimport java\nimport semmle.code.java.frameworks.spring.Spring\n\nfrom SpringBean b\nwhere\n  not b.hasBeanId() and\n  b.hasBeanName()\nselect b,\n  \"Use \\\"id\\\" instead of \\\"name\\\" to take advantage of the IDREF constraint in the XML parser.\"\n\n```",
+      "metadata": {
+        "description": "Using 'id' instead of 'name' to name a Spring bean enables the XML parser to perform",
+        "name": "Use id instead of name",
+        "precision": "low",
+        "source": "local_codeql",
+        "file_path": "/opt/codeql-bundle-2.23.3/codeql/qlpacks/codeql/java-queries/1.8.2/Frameworks/Spring/Violations of Best Practice/UseIdInsteadOfName.ql",
+        "tags": "reliability",
+        "type": "query",
+        "relative_path": "1.8.2/Frameworks/Spring/Violations of Best Practice/UseIdInsteadOfName.ql",
+        "kind": "problem",
+        "category": "general"
+      },
+      "embedding_preview": [
+        -0.013110498897731304,
+        0.05782724916934967,
+        -0.013932864181697369,
+        0.017420325428247452,
+        -0.06899453699588776,
+        0.0345514751970768,
+        0.059072840958833694,
+        -0.004737640265375376
+      ],
+      "embedding_dim": 384
+    }
+  ]
+}

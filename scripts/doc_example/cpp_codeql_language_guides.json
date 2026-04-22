@@ -1,0 +1,126 @@
+{
+  "collection": "cpp_codeql_language_guides",
+  "total_count": 137,
+  "sample_size": 5,
+  "items": [
+    {
+      "id": "cpp_codeql_language_guides_473f4e4a35b3_example_24",
+      "document": "Code Example from Conversions and classes in C and C++¶:\n\n```codeql\n... = ... | unsigned int\n... = ... | myInt\n```",
+      "metadata": {
+        "language": "cpp",
+        "example_language": "codeql",
+        "doc_type": "language_guide",
+        "parent_title": "Conversions and classes in C and C++¶",
+        "source": "codeql_docs",
+        "type": "code_example",
+        "url": "https://codeql.github.com/docs/codeql-language-guides/conversions-and-classes-in-cpp/"
+      },
+      "embedding_preview": [
+        -0.00215127388946712,
+        0.0913451537489891,
+        -0.07161156833171844,
+        -0.026318171992897987,
+        -0.07485206425189972,
+        -0.06764619797468185,
+        0.061455558985471725,
+        0.08710189908742905
+      ],
+      "embedding_dim": 384
+    },
+    {
+      "id": "cpp_codeql_language_guides_fbbfe864b6f0_example_1",
+      "document": "Code Example from Detecting a potential buffer overflow¶:\n\n```codeql\nimport cpp\n\nclass MallocCall extends FunctionCall\n{\n    MallocCall() { this.getTarget().hasGlobalName(\"malloc\") }\n}\n```",
+      "metadata": {
+        "source": "codeql_docs",
+        "example_language": "codeql",
+        "type": "code_example",
+        "parent_title": "Detecting a potential buffer overflow¶",
+        "doc_type": "language_guide",
+        "url": "https://codeql.github.com/docs/codeql-language-guides/detecting-a-potential-buffer-overflow/"
+      },
+      "embedding_preview": [
+        -0.030711794272065163,
+        0.009629419073462486,
+        -0.07475593686103821,
+        -0.0010142442770302296,
+        -0.08470407873392105,
+        -0.11147741228342056,
+        0.09453193098306656,
+        0.09251032024621964
+      ],
+      "embedding_dim": 384
+    },
+    {
+      "id": "cpp_codeql_language_guides_aec92feeaf87_example_4",
+      "document": "Code Example from Basic query for C and C++ code¶:\n\n```codeql\nwhere ifstmt.getThen() = block and block.getNumStmt() = 0\n```",
+      "metadata": {
+        "example_language": "codeql",
+        "language": "cpp",
+        "doc_type": "language_guide",
+        "source": "codeql_docs",
+        "type": "code_example",
+        "url": "https://codeql.github.com/docs/codeql-language-guides/basic-query-for-cpp-code/",
+        "parent_title": "Basic query for C and C++ code¶"
+      },
+      "embedding_preview": [
+        -0.04355688765645027,
+        0.07739171385765076,
+        -0.0492694266140461,
+        0.052435342222452164,
+        -0.08813275396823883,
+        0.03623479977250099,
+        0.040959008038043976,
+        0.08714035153388977
+      ],
+      "embedding_dim": 384
+    },
+    {
+      "id": "cpp_codeql_language_guides_76b3330a0d7d_example_12",
+      "document": "Code Example from Expressions, types, and statements in C and C++¶:\n\n```codeql\ne.getEnclosingStmt().getParentStmt*()\n```",
+      "metadata": {
+        "type": "code_example",
+        "parent_title": "Expressions, types, and statements in C and C++¶",
+        "example_language": "codeql",
+        "doc_type": "language_guide",
+        "language": "cpp",
+        "source": "codeql_docs",
+        "url": "https://codeql.github.com/docs/codeql-language-guides/expressions-types-and-statements-in-cpp/"
+      },
+      "embedding_preview": [
+        -0.04986875504255295,
+        0.09164537489414215,
+        0.00477467430755496,
+        0.06875065714120865,
+        -0.07037246227264404,
+        0.038345612585544586,
+        0.03593062981963158,
+        0.08972647041082382
+      ],
+      "embedding_dim": 384
+    },
+    {
+      "id": "cpp_codeql_language_guides_fd5b44827cd3_example_10",
+      "document": "Code Example from Using the guards library in C and C++¶:\n\n```codeql\ncomparesEq(left, right, k, true, testIsTrue)\n```",
+      "metadata": {
+        "parent_title": "Using the guards library in C and C++¶",
+        "doc_type": "language_guide",
+        "language": "cpp",
+        "source": "codeql_docs",
+        "example_language": "codeql",
+        "type": "code_example",
+        "url": "https://codeql.github.com/docs/codeql-language-guides/using-the-guards-library-in-cpp/"
+      },
+      "embedding_preview": [
+        -0.020961271598935127,
+        0.0652516707777977,
+        -0.09202617406845093,
+        -0.011069824919104576,
+        -0.07666187733411789,
+        -0.019126277416944504,
+        0.052867162972688675,
+        0.002818936947733164
+      ],
+      "embedding_dim": 384
+    }
+  ]
+}

@@ -1,0 +1,38 @@
+{
+    "model": {
+        "maxSessionTurns": 50,
+        "name": "gemini-2.5-flash"
+    },
+    "mcpServers": {
+        "chroma": {
+            "command": "uvx",
+            "args": [
+                "chroma-mcp",
+                "--client-type",
+                "http",
+                "--host",
+                "localhost",
+                "--port",
+                "8000",
+                "--custom-auth-credentials",
+                "test",
+                "--ssl",
+                "false"
+            ]
+        },
+        "codeql": {
+            "command": "node",
+            "args": [
+                "/path/to/codeql-lsp-mcp/dist/index.js"
+            ]
+        }
+    },
+    "security": {
+        "auth": {
+            "selectedType": "gemini-api-key"
+        }
+    },
+    "privacy": {
+        "usageStatisticsEnabled": false
+    }
+}

@@ -1,0 +1,28 @@
+{
+    "mcpServers": {
+        "chroma": {
+            "type": "stdio",
+            "command": "uvx",
+            "args": [
+                "chroma-mcp",
+                "--client-type",
+                "http",
+                "--host",
+                "localhost",
+                "--port",
+                "8000",
+                "--custom-auth-credentials",
+                "test",
+                "--ssl",
+                "false"
+            ],
+            "env": {}
+        },
+        "codeql": {
+            "command": "node",
+            "args": [
+                "/path/to/codeql-lsp-mcp/dist/index.js"
+            ]
+        }
+    }
+}

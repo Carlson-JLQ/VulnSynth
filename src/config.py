@@ -27,6 +27,12 @@ CPP_SECURITY_QLPACK_PATH = os.environ.get("CPP_SECURITY_QLPACK_PATH", f"{CODEQL_
 CPP_LIBRARY_QLPACK_PATH = os.environ.get("CPP_LIBRARY_QLPACK_PATH", f"{CODEQL_HOME}/qlpacks/codeql/cpp-all/")
 
 
+CVES_PATH = f"{VULNSYNTH_ROOT_DIR}/cves"
+# chroma db collection for retrieving CVE descriptions 
+NVD_CACHE="nist_cve_cache"
+# chroma db collection for retrieving ASTs of CVE diffs. 
+AST_CACHE = "cve_ast_cache"
+
 
 # ChromaDB connection settings
 # Set CHROMA_HOST to use HTTP client (Docker/remote), unset for local PersistentClient

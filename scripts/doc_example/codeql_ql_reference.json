@@ -1,0 +1,122 @@
+{
+  "collection": "codeql_ql_reference",
+  "total_count": 228,
+  "sample_size": 5,
+  "items": [
+    {
+      "id": "codeql_ql_reference_af98494f3db7_example_5",
+      "document": "Code Example from Expressions¶:\n\n```codeql\n[2, 3, 5, 7, 11, 13, 17, 19, 23, 29]\n```",
+      "metadata": {
+        "doc_type": "ql_reference",
+        "type": "code_example",
+        "parent_title": "Expressions¶",
+        "url": "https://codeql.github.com/docs/ql-language-reference/expressions/",
+        "source": "codeql_docs",
+        "example_language": "codeql"
+      },
+      "embedding_preview": [
+        -0.056164368987083435,
+        0.04612955078482628,
+        -0.04082926735281944,
+        0.00017975052469410002,
+        -0.0639985203742981,
+        0.005033309571444988,
+        0.057571057230234146,
+        -0.00012559279275592417
+      ],
+      "embedding_dim": 384
+    },
+    {
+      "id": "codeql_ql_reference_af98494f3db7_example_31",
+      "document": "Code Example from Expressions¶:\n\n```codeql\ncount(int i | i = \"hello\".indexOf(\"l\") | i)\ncount(\"hello\".indexOf(\"l\"))\n```",
+      "metadata": {
+        "example_language": "codeql",
+        "doc_type": "ql_reference",
+        "parent_title": "Expressions¶",
+        "source": "codeql_docs",
+        "url": "https://codeql.github.com/docs/ql-language-reference/expressions/",
+        "type": "code_example"
+      },
+      "embedding_preview": [
+        0.04466938227415085,
+        -0.0022584677208215,
+        0.015316590666770935,
+        0.07744252681732178,
+        -0.12251489609479904,
+        0.05795924738049507,
+        0.09688577800989151,
+        0.055634111166000366
+      ],
+      "embedding_dim": 384
+    },
+    {
+      "id": "codeql_ql_reference_af98494f3db7_example_41",
+      "document": "Code Example from Expressions¶:\n\n```codeql\n(0, b), (0, d), (0, e), (1, c), (2, a)\n```",
+      "metadata": {
+        "url": "https://codeql.github.com/docs/ql-language-reference/expressions/",
+        "source": "codeql_docs",
+        "doc_type": "ql_reference",
+        "parent_title": "Expressions¶",
+        "type": "code_example",
+        "example_language": "codeql"
+      },
+      "embedding_preview": [
+        -0.0011464129202067852,
+        0.02981192246079445,
+        -0.05473758652806282,
+        -0.003156743012368679,
+        -0.11059840768575668,
+        0.001470426912419498,
+        0.038284916430711746,
+        -0.00730935437604785
+      ],
+      "embedding_dim": 384
+    },
+    {
+      "id": "codeql_ql_reference_646d8c74d915_example_4",
+      "document": "Code Example from Recursion¶:\n\n```codeql\nPerson getAnAncestor() {\n  result = this.getAParent().getAnAncestor()\n}\n```",
+      "metadata": {
+        "source": "codeql_docs",
+        "url": "https://codeql.github.com/docs/ql-language-reference/recursion/",
+        "type": "code_example",
+        "doc_type": "ql_reference",
+        "parent_title": "Recursion¶",
+        "example_language": "codeql"
+      },
+      "embedding_preview": [
+        -0.09957222640514374,
+        0.05904114246368408,
+        -0.0777880996465683,
+        0.002874394180253148,
+        -0.17877943813800812,
+        0.003338913433253765,
+        0.057271428406238556,
+        0.03149104490876198
+      ],
+      "embedding_dim": 384
+    },
+    {
+      "id": "codeql_ql_reference_1f012ce990ea_example_1",
+      "document": "Code Example from QL language specification¶:\n\n```codeql\nimport ::= annotations \"import\" importModuleExpr (\"as\" modulename)?\n\nimportModuleExpr ::= importModuleId arguments?\n\nimportModuleId ::= qualId | importModuleExpr \"::\" modulename\n\nqualId ::= simpleId | qualId \".\" simpleId\n\narguments ::= \"<\" argument (\",\" argument)* \">\"\n\nargument ::= moduleExpr | type | predicateRef \"/\" int\n```",
+      "metadata": {
+        "type": "code_example",
+        "source": "codeql_docs",
+        "url": "https://codeql.github.com/docs/ql-language-reference/ql-language-specification/",
+        "example_language": "codeql",
+        "doc_type": "ql_reference",
+        "parent_title": "QL language specification¶"
+      },
+      "embedding_preview": [
+        -0.02849065512418747,
+        0.04935517534613609,
+        -0.045464176684617996,
+        0.028399642556905746,
+        -0.0999952033162117,
+        0.049878623336553574,
+        0.08482389897108078,
+        0.03172406181693077
+      ],
+      "embedding_dim": 384
+    }
+  ]
+}
