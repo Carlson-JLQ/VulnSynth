@@ -40,7 +40,7 @@ except Exception:
 # Ablation modes that skip Chroma MCP setup
 _NO_CHROMA_MODES = ("no_tools",)
 # Ablation modes that skip CodeQL LSP MCP setup
-_NO_LSP_MODES = ("no_tools",)
+_NO_LSP_MODES = ("no_tools", "no_lsp")
 
 MODELS = {
     "gpt-5": "gpt-5",
@@ -576,6 +576,14 @@ class CodexBackend(AgentBackend):
             "--dangerously-bypass-approvals-and-sandbox",
             "--json",
         ]
+        # Disable Codex remote plugin sync; it can hang in environments
+        # that cannot authenticate to chatgpt.com plugin endpoints.
+        cmd.extend(["-c", "features.remote_plugin_sync=false"])
+        # In some environments, configured MCP servers can cause `codex exec` to hang
+        # (e.g., broken mcp server command/path). For no-tools runs, explicitly
+        # disable MCP by overriding config at invocation time.
+        if self.ablation_mode == "no_tools":
+            cmd.extend(["-c", "mcp_servers={}"])
         if not self.use_local_config:
             cmd.extend(["-m", model_id])
         return cmd

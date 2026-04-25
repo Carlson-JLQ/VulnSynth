@@ -113,7 +113,10 @@ def create_backend(agent_type: str, model: str, logger: logging.Logger,
     elif agent_type == "codex":
         from .codex_backend import CodexBackend
         return CodexBackend(model, logger, ablation_mode=ablation_mode, **backend_kwargs)
+    elif agent_type == "coco":
+        from .coco_backend import CocoBackend
+        return CocoBackend(model, logger, ablation_mode=ablation_mode, **backend_kwargs)
     else:
         raise ValueError(
-            f"Unknown agent type: {agent_type!r}. Available: claude, gemini, codex"
+            f"Unknown agent type: {agent_type!r}. Available: claude, gemini, codex, coco"
         )

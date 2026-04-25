@@ -1074,7 +1074,7 @@ async def main():
     parser.add_argument("--no-cache-phase-output", dest="cache_phase_output", action="store_false")
     parser.add_argument("--model", default="sonnet-4",
                         choices=["sonnet-4", "sonnet-4.5", "gemini-2.5-pro", "gemini-2.5-flash", "gpt-5", "gpt-5.4"])
-    parser.add_argument("--agent", default="claude", choices=["claude", "gemini", "codex"],
+    parser.add_argument("--agent", default="claude", choices=["claude", "gemini", "codex", "coco"],
                         help="Agent backend to use")
     parser.add_argument(
         "--codex-use-local-config",

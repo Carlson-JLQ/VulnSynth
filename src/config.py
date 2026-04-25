@@ -36,10 +36,11 @@ AST_CACHE = "cve_ast_cache"
 
 # ChromaDB connection settings
 # Set CHROMA_HOST to use HTTP client (Docker/remote), unset for local PersistentClient
-CHROMA_HOST = os.environ.get("CHROMA_HOST", None)
+CHROMA_HOST = os.environ.get("CHROMA_HOST") or None
 CHROMA_PORT = int(os.environ.get("CHROMA_PORT", "8000"))
 CHROMA_AUTH_TOKEN = os.environ.get("CHROMA_AUTH_TOKEN", "test")
-CHROMA_DB_PATH = os.environ.get("CHROMA_DB_PATH",os.path.join(VULNSYNTH_ROOT_DIR, "chroma_db"))
+# Treat empty-string env vars as unset to avoid writing invalid paths.
+CHROMA_DB_PATH = os.environ.get("CHROMA_DB_PATH") or os.path.join(VULNSYNTH_ROOT_DIR, "chroma_db")
 
 
 def get_chroma_client() -> chromadb.ClientAPI:
