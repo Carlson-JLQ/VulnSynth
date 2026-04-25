@@ -214,3 +214,4 @@ cves
 chroma_db
 data/chromadb
 codeql-lsp-mcp
+src/IR_rerun_envfix

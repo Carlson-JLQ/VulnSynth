@@ -210,3 +210,143 @@ Your task is to:
 - The top-level `layer` field must be `"L3_query_construction_steps"`.
 - Make sure the JSON is syntactically valid.
 """
+
+
+def build_fragment_prompt(
+    task,
+    l1_json: str,
+    l2_json: str,
+    l3_json: str,
+    step_json: str,
+    retrieval_plan_json: str,
+    language: str,
+) -> str:
+    return f"""
+# VulnSynth Gen Agent: Step Fragment Generation
+
+You are generating one CodeQL fragment for one L3 query-construction step.
+
+Your task is to:
+1. read the L1/L2/L3 context below
+2. focus only on the provided step
+3. use MCP tools when helpful, including Chroma collections that match the retrieval plan
+4. generate one composable CodeQL fragment for this step
+5. return exactly one JSON object
+
+{_shared_context(task)}
+
+## Target Language
+- CodeQL language: `{language}`
+
+## Input L1 JSON
+{l1_json}
+
+## Input L2 JSON
+{l2_json}
+
+## Input L3 JSON
+{l3_json}
+
+## Current Step JSON
+{step_json}
+
+## Retrieval Plan
+{retrieval_plan_json}
+
+## Retrieval Guidance
+- Use `nist_cve_cache` for CVE-specific grounding when needed.
+- Use `codeql_ql_reference` for shared CodeQL syntax, classes, and predicate conventions.
+- Use `cwe_data` for weakness semantics when useful.
+- Use the language-specific collections listed in the retrieval plan for classes, predicates, guides, and local query patterns.
+- Prefer language-specific collections for concrete CodeQL APIs and example query structure.
+- Use the step `description`, `retrieval_hints`, and retrieval plan query views as your retrieval inputs.
+
+## Fragment Requirements
+- Generate a fragment only for the current step, not the whole query.
+- Respect `requires_symbols` and `produces_symbols`.
+- Match the requested `fragment_type`.
+- Keep the fragment composable with later steps.
+- Prefer helper predicates for reusable logic.
+- The fragment may define helper predicates, helper classes, or where/select snippets depending on the step.
+- Do not invent APIs that do not exist in `{language}` CodeQL libraries.
+
+## Output Contract
+- Return exactly one JSON object.
+- Do not wrap the JSON in markdown fences.
+- The JSON must contain:
+  - `step_id`
+  - `fragment_type`
+  - `summary`
+  - `required_imports`
+  - `defines_symbols`
+  - `depends_on_symbols`
+  - `codeql_fragment`
+  - `notes`
+- `codeql_fragment` must be a plain string containing only CodeQL code for this step.
+- Make sure the JSON is syntactically valid.
+"""
+
+
+def build_query_composition_prompt(
+    task,
+    l1_json: str,
+    l2_json: str,
+    l3_json: str,
+    fragment_bundle_json: str,
+    language: str,
+) -> str:
+    return f"""
+# VulnSynth Gen Agent: Final Query Composition
+
+You are composing a complete CodeQL query from previously generated step fragments.
+
+Your task is to:
+1. read the L1/L2/L3 context below
+2. read all generated step fragments
+3. combine them into one coherent, compilable CodeQL query
+4. use MCP tools when helpful to verify language-specific classes, predicates, and query structure
+5. return exactly one JSON object
+
+{_shared_context(task)}
+
+## Target Language
+- CodeQL language: `{language}`
+
+## Input L1 JSON
+{l1_json}
+
+## Input L2 JSON
+{l2_json}
+
+## Input L3 JSON
+{l3_json}
+
+## Input Step Fragments JSON
+{fragment_bundle_json}
+
+## Composition Requirements
+- Compose a single complete CodeQL query.
+- Reconcile duplicate imports and overlapping helper predicates.
+- Keep the final query aligned with the L2 vulnerability semantics.
+- Use the L3 steps as the composition scaffold.
+- Prefer a correct and coherent query over mechanically concatenating every fragment verbatim.
+- Preserve the intended reporting anchor and final finding message.
+- If some fragment should be folded into a `where` clause rather than kept as a separate predicate, do so.
+- The final query must be suitable for writing to a `.ql` file.
+- Do not return partial code.
+
+## Output Contract
+- Return exactly one JSON object.
+- Do not wrap the JSON in markdown fences.
+- The JSON must contain:
+  - `case_id`
+  - `language`
+  - `query_kind`
+  - `query_file_name`
+  - `required_imports`
+  - `supporting_predicates`
+  - `query_code`
+  - `composition_notes`
+- `query_code` must be a complete CodeQL query as a plain string.
+- Make sure the JSON is syntactically valid.
+"""
