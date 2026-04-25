@@ -120,6 +120,41 @@ def _parse_json_maybe(line) -> Optional[dict]:
         return {"_raw": s}
 
 
+def _looks_like_plan_ir_bundle(obj: object) -> bool:
+    if not isinstance(obj, dict):
+        return False
+    if not all(k in obj for k in ("l1", "l2", "l3")):
+        return False
+    return isinstance(obj.get("l1"), dict) and isinstance(obj.get("l2"), dict) and isinstance(obj.get("l3"), dict)
+
+
+def _extract_json_objects_from_text(text: str) -> List[dict]:
+    """Extract JSON objects embedded in a larger string.
+
+    Uses JSONDecoder.raw_decode starting from each '{' occurrence.
+    Returns objects in discovery order.
+    """
+    out: List[dict] = []
+    if not text:
+        return out
+    decoder = json.JSONDecoder()
+    i = 0
+    n = len(text)
+    while i < n:
+        j = text.find("{", i)
+        if j == -1:
+            break
+        try:
+            obj, end = decoder.raw_decode(text, j)
+            if isinstance(obj, dict):
+                out.append(obj)
+            # Continue scanning after this '{' to find later JSON objects.
+            i = j + 1
+        except json.JSONDecodeError:
+            i = j + 1
+    return out
+
+
 class CodexBackend(AgentBackend):
 
     def __init__(self, model: str, logger, ablation_mode: str = "full",
@@ -155,20 +190,103 @@ class CodexBackend(AgentBackend):
             if not obj or "_raw" in obj:
                 continue
             # Format 1: {"msg": {"type": "agent_message", "message": "..."}}
-            msg = obj.get("msg", {})
-            if msg.get("type") == "agent_message":
+            msg = obj.get("msg")
+            if isinstance(msg, dict) and msg.get("type") == "agent_message":
                 text = (msg.get("message", "") or "").strip()
                 if text:
                     parts.append(text)
                 continue
-            # Format 2: {"type": "item.completed", "item": {"type": "agent_message", "text": "..."}}
-            item = obj.get("item", {})
-            if item.get("type") == "agent_message":
+
+            # Format 2: {"type": "agent_message", "message": "..."} (newer Codex JSONL)
+            if obj.get("type") == "agent_message":
+                text = (obj.get("message") or obj.get("text") or "").strip()
+                if text:
+                    parts.append(text)
+                continue
+
+            # Format 3: {"type": "item.completed", "item": {"type": "agent_message", "text": "..."}}
+            item = obj.get("item")
+            if isinstance(item, dict) and item.get("type") == "agent_message":
                 text = (item.get("text", "") or "").strip()
                 if text:
                     parts.append(text)
         result = "\n".join(parts)
         return result if result else stdout.strip()
+
+    @staticmethod
+    def extract_plan_ir_json(stdout: str) -> Optional[dict]:
+        """Extract the Plan Agent JSON bundle {l1,l2,l3} from mixed Codex output.
+
+        Codex `--json` may emit JSONL event frames like:
+        - {"type":"thread.started"...}
+        - {"type":"error","message":"..."}
+        - {"msg":{"type":"agent_message","message":"{...json...}"}}
+
+        This method tolerates JSONL noise and returns the best-matching JSON object.
+        """
+        if not stdout:
+            return None
+
+        # Case 1: stdout itself is strict JSON.
+        try:
+            direct = json.loads(stdout.strip())
+            if _looks_like_plan_ir_bundle(direct):
+                return direct
+        except Exception:
+            pass
+
+        # Case 2: JSONL frames; look for a frame that already is the bundle.
+        bundle_candidate: Optional[dict] = None
+        message_parts: List[str] = []
+        for line in stdout.splitlines():
+            obj = _parse_json_maybe(line)
+            if not obj or "_raw" in obj:
+                continue
+
+            # If any event frame is the bundle itself, keep the latest.
+            if _looks_like_plan_ir_bundle(obj):
+                bundle_candidate = obj
+                continue
+
+            # Extract message text from common shapes.
+            msg = obj.get("msg")
+            if isinstance(msg, dict) and msg.get("type") == "agent_message":
+                t = (msg.get("message", "") or "").strip()
+                if t:
+                    message_parts.append(t)
+                continue
+            if obj.get("type") == "agent_message":
+                t = (obj.get("message") or obj.get("text") or "").strip()
+                if t:
+                    message_parts.append(t)
+                continue
+            item = obj.get("item")
+            if isinstance(item, dict) and item.get("type") == "agent_message":
+                t = (item.get("text", "") or "").strip()
+                if t:
+                    message_parts.append(t)
+
+        if bundle_candidate is not None:
+            return bundle_candidate
+
+        # Case 3: message text contains embedded JSON.
+        if message_parts:
+            joined = "\n".join(message_parts).strip()
+            # Try strict JSON first.
+            try:
+                obj = json.loads(joined)
+                if _looks_like_plan_ir_bundle(obj):
+                    return obj
+            except Exception:
+                pass
+
+            # Otherwise, scan for embedded JSON objects.
+            candidates = _extract_json_objects_from_text(joined)
+            # Prefer the last candidate that matches the plan bundle shape.
+            for cand in reversed(candidates):
+                if _looks_like_plan_ir_bundle(cand):
+                    return cand
+        return None
 
     def parse_usage(self, stdout: str) -> Dict:
         usage = {
@@ -186,14 +304,19 @@ class CodexBackend(AgentBackend):
                 obj = _parse_json_maybe(line)
                 if not obj or "_raw" in obj:
                     continue
-                msg = obj.get("msg", {})
-                if msg.get("type") == "token_count":
+                msg = obj.get("msg")
+                msg_type = None
+                if isinstance(msg, dict):
+                    msg_type = msg.get("type")
+                else:
+                    msg_type = obj.get("type")
+
+                if msg_type == "token_count":
                     usage["sessions_count"] += 1
-                    usage["total_input_tokens"] += int(msg.get("input_tokens", 0))
-                    usage["total_output_tokens"] += int(msg.get("output_tokens", 0))
-                    usage["total_reasoning_tokens"] += int(
-                        msg.get("reasoning_output_tokens", 0)
-                    )
+                    src = msg if isinstance(msg, dict) else obj
+                    usage["total_input_tokens"] += int(src.get("input_tokens", 0))
+                    usage["total_output_tokens"] += int(src.get("output_tokens", 0))
+                    usage["total_reasoning_tokens"] += int(src.get("reasoning_output_tokens", 0))
             if usage["sessions_count"] > 0:
                 self.logger.info(
                     f"Parsed Codex usage: {usage['sessions_count']} token_count frames, "
@@ -216,8 +339,9 @@ class CodexBackend(AgentBackend):
             )
 
         if self.ablation_mode in _NO_CHROMA_MODES:
-            self.logger.info(f"Ablation mode '{self.ablation_mode}': skipping MCP setup")
-            self._write_codex_config(include_chroma=False, include_codeql=False)
+            # For no-tools runs, avoid rewriting ~/.codex/config.toml at all.
+            # Rewriting can unintentionally drop user-specific provider/auth fields.
+            self.logger.info(f"Ablation mode '{self.ablation_mode}': skipping MCP setup and config writes")
             return None
 
         include_codeql = self.ablation_mode not in _NO_LSP_MODES
@@ -237,8 +361,12 @@ class CodexBackend(AgentBackend):
         phase_name: str,
     ) -> Dict:
         """Execute a single Codex context window via JSONL streaming."""
+        # Default behavior: do NOT run `codex login` automatically.
+        # If the environment has credentials (e.g., OPENAI_API_KEY), Codex can use them directly.
+        # If a caller wants to force login, set CODEX_LOGIN_WITH_API_KEY=1.
+        do_login = str(env.get("CODEX_LOGIN_WITH_API_KEY", "")).strip().lower() in _TRUTHY_VALUES
         api_key = env.get("OPENAI_API_KEY", "")
-        if api_key and not self.use_local_config:
+        if do_login and api_key and not self.use_local_config:
             try:
                 login_proc = await asyncio.create_subprocess_exec(
                     self.cli_path, "login", "--with-api-key",
@@ -268,6 +396,8 @@ class CodexBackend(AgentBackend):
         found_query_marker = False
         done_at: Optional[float] = None
         grace_after_done_sec = 6
+        hard_timeout_sec = int(os.environ.get("CODEX_EXEC_HARD_TIMEOUT_SEC", "600"))
+        started_at = time.time()
 
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -300,20 +430,33 @@ class CodexBackend(AgentBackend):
                         obj = _parse_json_maybe(raw_line)
                         if not obj or "_raw" in obj:
                             continue
-                        msg = obj.get("msg", {})
-                        if msg.get("type") == "token_count":
+                        msg = obj.get("msg")
+                        msg_type = None
+                        if isinstance(msg, dict):
+                            msg_type = msg.get("type")
+                        else:
+                            msg_type = obj.get("type")
+
+                        if msg_type == "token_count":
+                            src = msg if isinstance(msg, dict) else obj
                             usage_acc["sessions_count"] += 1
                             usage_acc["total_input_tokens"] += int(
-                                msg.get("input_tokens", 0)
+                                src.get("input_tokens", 0)
                             )
                             usage_acc["total_output_tokens"] += int(
-                                msg.get("output_tokens", 0)
+                                src.get("output_tokens", 0)
                             )
                             usage_acc["total_reasoning_tokens"] += int(
-                                msg.get("reasoning_output_tokens", 0)
+                                src.get("reasoning_output_tokens", 0)
                             )
-                        elif msg.get("type") == "agent_message":
-                            text = msg.get("message", "") or ""
+                            # Treat token_count as a completion signal for prompts
+                            # that do not emit QUERY_FILE_PATH markers.
+                            if not done_at:
+                                done_at = time.time()
+                                found_query_marker = True
+                        elif msg_type == "agent_message":
+                            src = msg if isinstance(msg, dict) else obj
+                            text = src.get("message") or src.get("text") or ""
                             if re.search(r"QUERY_FILE_PATH:", text) and not found_query_marker:
                                 found_query_marker = True
                                 done_at = time.time()
@@ -332,6 +475,11 @@ class CodexBackend(AgentBackend):
             # Supervisor: wait for natural exit or query marker + grace period
             while True:
                 if proc.returncode is not None:
+                    break
+                if hard_timeout_sec > 0 and (time.time() - started_at) >= hard_timeout_sec:
+                    self.logger.warning(
+                        f"Codex exec hard timeout after {hard_timeout_sec}s; terminating process"
+                    )
                     break
                 if found_query_marker:
                     if usage_acc["sessions_count"] > 0:
@@ -413,6 +561,11 @@ class CodexBackend(AgentBackend):
         if self.ablation_mode == "no_tools":
             return prompts.refinement_no_tools(task, previous_feedback, iteration)
         return prompts.refinement_full(task, previous_feedback, iteration, collection_name)
+
+
+    def create_plan_ir_prompt(self, task) -> str:
+        """Create the prompt for the Plan Agent (L1/L2/L3 IR synthesis)."""
+        return prompts.plan_ir_generation(task)
 
     # Workspace helpers
 

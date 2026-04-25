@@ -145,18 +145,35 @@ def checkout_commit(project_source, commit_hash):
         print(msg)
         logger.info(msg)
 
-        stash_result = subprocess.run([
-            'git', 'stash', 'push', '-m', f'Auto-stash before checkout {commit_hash[:8]}'
-        ], cwd=project_source, capture_output=True, text=True, timeout=30)
+        # Avoid `git stash` here: on very large repositories it can be slow and
+        # may leave a stale `.git/index.lock` if interrupted.
+        lock_path = os.path.join(project_source, '.git', 'index.lock')
+        if os.path.exists(lock_path):
+            try:
+                os.remove(lock_path)
+                logger.warning(f"Removed stale git lock: {lock_path}")
+            except Exception as e:
+                logger.warning(f"Failed to remove stale git lock {lock_path}: {e}")
 
-        if stash_result.returncode == 0:
-            logger.info(f"Stashed changes before checkout of {commit_hash[:8]}")
-        else:
-            logger.debug(f"Stash result for {commit_hash[:8]}: {stash_result.stderr}")
+        def _run_checkout():
+            return subprocess.run(
+                ['git', 'checkout', '-f', commit_hash],
+                cwd=project_source,
+                capture_output=True,
+                text=True,
+                timeout=1800,
+            )
 
-        result = subprocess.run([
-            'git', 'checkout', commit_hash
-        ], cwd=project_source, capture_output=True, text=True, timeout=60)
+        result = _run_checkout()
+        if result.returncode != 0 and 'index.lock' in (result.stderr or ''):
+            # Best-effort retry if a stale lock prevented checkout.
+            if os.path.exists(lock_path):
+                try:
+                    os.remove(lock_path)
+                    logger.warning(f"Removed stale git lock (retry): {lock_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to remove stale git lock (retry) {lock_path}: {e}")
+            result = _run_checkout()
 
         if result.returncode == 0:
             msg = f"Successfully checked out commit {commit_hash[:8]}"

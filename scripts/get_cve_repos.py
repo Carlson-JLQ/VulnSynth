@@ -43,7 +43,7 @@ except Exception:
 
 
 DEFAULT_SKIPPED_CVES = {"CVE-2022-36007"}
-DEFAULT_CVE_TIMEOUT_SECONDS = 600
+DEFAULT_CVE_TIMEOUT_SECONDS = 1200
 
 
 class CVEProcessingTimeout(TimeoutError):
@@ -159,6 +159,22 @@ def clone_repository(github_url: str, clone_dir: str,
     Returns:
         True if successful, False otherwise
     """
+    # Some environments hang on GitHub repo URLs without the `.git` suffix.
+    # Normalize clone URLs to improve reliability.
+    def _normalize_clone_url(url: str) -> str:
+        u = (url or "").strip()
+        if not u:
+            return u
+        # Drop a single trailing slash to avoid `.../.git`.
+        if u.endswith('/'):
+            u = u[:-1]
+        # Only append for GitHub HTTPS URLs; keep SSH / other hosts untouched.
+        if u.startswith('https://github.com/') and not u.endswith('.git'):
+            u = u + '.git'
+        return u
+
+    github_url = _normalize_clone_url(github_url)
+
     attempts = 3
     for attempt in range(1, attempts + 1):
         try:
