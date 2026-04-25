@@ -1,0 +1,188 @@
+{
+  "layer": "L2_schema_ir",
+  "schema_version": "2.0",
+  "case_id": "CVE-2025-27818",
+  "pattern_type": "incomplete_security_policy",
+  "language": "java",
+  "entities": [
+    {
+      "id": "ent_policy_key",
+      "kind": "config_key",
+      "name": "disallowed_login_modules_config_key",
+      "description": "System property key used to obtain the list of disallowed JAAS login modules.",
+      "value": "org.apache.kafka.disallowed.login.modules",
+      "evidence_refs": [
+        "fact_code_policy_read"
+      ]
+    },
+    {
+      "id": "ent_policy_default",
+      "kind": "policy",
+      "name": "default_disallowed_login_modules",
+      "description": "Default denylist policy artifact used when the disallowed login modules system property is not overridden.",
+      "policy_kind": "denylist",
+      "value_shape": "comma_separated_class_names",
+      "symbol_hint": "DISALLOWED_LOGIN_MODULES_DEFAULT",
+      "vulnerable_value": "com.sun.security.auth.module.JndiLoginModule",
+      "fixed_value": "com.sun.security.auth.module.JndiLoginModule,com.sun.security.auth.module.LdapLoginModule",
+      "evidence_refs": [
+        "fact_code_default_policy_constant",
+        "fact_patch_extend_default_policy"
+      ]
+    },
+    {
+      "id": "ent_policy_check",
+      "kind": "check",
+      "name": "denylist_membership_check",
+      "description": "Membership test that blocks a login module name when it is found in the disallowed login module set.",
+      "check_kind": "membership_test",
+      "api_hint": "java.util.Set.contains",
+      "location_hint": "throwIfLoginModuleIsNotAllowed",
+      "evidence_refs": [
+        "fact_code_policy_check"
+      ]
+    },
+    {
+      "id": "ent_subject_login_module",
+      "kind": "subject",
+      "name": "login_module_name",
+      "description": "Trimmed login module name extracted from AppConfigurationEntry and checked against the denylist.",
+      "value_shape": "class_name",
+      "api_hint": "javax.security.auth.login.AppConfigurationEntry.getLoginModuleName",
+      "evidence_refs": [
+        "fact_code_policy_check"
+      ]
+    },
+    {
+      "id": "ent_required_blocked_member",
+      "kind": "policy_member",
+      "name": "ldap_login_module_member",
+      "description": "Required blocked member that should appear in the default denylist.",
+      "value": "com.sun.security.auth.module.LdapLoginModule",
+      "evidence_refs": [
+        "fact_patch_extend_default_policy",
+        "fact_patch_add_regression_tests"
+      ]
+    },
+    {
+      "id": "ent_protected_action",
+      "kind": "action",
+      "name": "loading_jaas_login_module",
+      "description": "Continuing with a JAAS login module after the denylist check passes.",
+      "evidence_refs": [
+        "fact_code_policy_check",
+        "fact_env_attacker_controlled_jaas"
+      ]
+    }
+  ],
+  "relations": [
+    {
+      "id": "rel_policy_read_uses_default",
+      "type": "reads_from",
+      "from": "ent_policy_check",
+      "to": "ent_policy_default",
+      "description": "The runtime denylist checked by the membership test is derived from a System.getProperty call that uses the default policy artifact as fallback.",
+      "evidence_refs": [
+        "fact_code_policy_read"
+      ]
+    },
+    {
+      "id": "rel_policy_check_tests_subject",
+      "type": "checks",
+      "from": "ent_policy_check",
+      "to": "ent_subject_login_module",
+      "description": "The denylist membership test checks the trimmed login module name.",
+      "evidence_refs": [
+        "fact_code_policy_check"
+      ]
+    },
+    {
+      "id": "rel_policy_check_protects_action",
+      "type": "protects",
+      "from": "ent_policy_check",
+      "to": "ent_protected_action",
+      "description": "The membership check is intended to prevent dangerous login modules from proceeding.",
+      "evidence_refs": [
+        "fact_code_policy_check",
+        "fact_env_attacker_controlled_jaas"
+      ]
+    }
+  ],
+  "constraints": [
+    {
+      "id": "con_missing_required_member",
+      "kind": "missing_member",
+      "target": "ent_policy_default",
+      "member": "ent_required_blocked_member",
+      "description": "The default denylist policy is vulnerable when it omits LdapLoginModule.",
+      "evidence_refs": [
+        "fact_code_default_policy_constant",
+        "fact_patch_extend_default_policy"
+      ]
+    },
+    {
+      "id": "con_default_branch_active",
+      "kind": "branch_condition",
+      "target": "ent_policy_default",
+      "description": "The vulnerable behavior occurs when the runtime branch uses the default denylist instead of a safer override.",
+      "evidence_refs": [
+        "fact_env_default_branch_used",
+        "fact_code_policy_read"
+      ]
+    }
+  ],
+  "guards": [
+    {
+      "id": "guard_policy_contains_required_member",
+      "kind": "contains_member",
+      "target": "ent_policy_default",
+      "member": "ent_required_blocked_member",
+      "description": "The policy is complete when the default denylist contains LdapLoginModule.",
+      "evidence_refs": [
+        "fact_patch_extend_default_policy"
+      ]
+    }
+  ],
+  "environment_conditions": [
+    {
+      "id": "env_attacker_controls_jaas_source",
+      "kind": "runtime_condition",
+      "description": "An attacker can influence the JAAS configuration source that determines the login module name.",
+      "evidence_refs": [
+        "fact_env_attacker_controlled_jaas"
+      ]
+    },
+    {
+      "id": "env_property_not_overridden",
+      "kind": "runtime_condition",
+      "description": "The vulnerable execution path uses the default value because org.apache.kafka.disallowed.login.modules is not set to a complete custom list.",
+      "evidence_refs": [
+        "fact_env_default_branch_used"
+      ]
+    }
+  ],
+  "evidence": [
+    {
+      "id": "ev_fix_adds_missing_member",
+      "kind": "fix_diff",
+      "description": "The patch adds LdapLoginModule to the default denylist constant, directly indicating the missing member that defines the vulnerability.",
+      "evidence_refs": [
+        "fact_patch_extend_default_policy"
+      ]
+    },
+    {
+      "id": "ev_tests_confirm_default_behavior",
+      "kind": "test_diff",
+      "description": "The regression tests confirm both the default blocked behavior and the override branch behavior.",
+      "evidence_refs": [
+        "fact_patch_add_regression_tests"
+      ]
+    }
+  ],
+  "reporting": {
+    "id": "report_policy_default",
+    "anchor": "ent_policy_default",
+    "message_template": "Default denylist policy is incomplete and does not block LdapLoginModule.",
+    "severity": "warning"
+  }
+}

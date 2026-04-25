@@ -7,3 +7,6 @@ Error fetching https://codeql.github.com/codeql-standard-libraries/java/semmle/c
 
 
 Error fetching https://codeql.github.com/codeql-standard-libraries/cpp/semmle/code/cpp/models/interfaces/Sql.qll/predicate.Sql$SqlExecutionFunction$hasSqlArgument.1.html: 503 Server Error: Service Unavailable for url: https://codeql.github.com/codeql-standard-libraries/cpp/semmle/code/cpp/models/interfaces/Sql.qll/predicate.Sql$SqlExecutionFunction$hasSqlArgument.1.html
+
+
+我的目标是从cve id出发

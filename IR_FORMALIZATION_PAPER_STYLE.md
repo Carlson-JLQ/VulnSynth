@@ -2,7 +2,7 @@
 
 ## Abstract
 
-We define a four-layer intermediate representation (IR) for synthesizing CodeQL queries from CVE descriptions, patch evidence, and code-level artifacts. The core motivation is that many vulnerability classes cannot be faithfully represented by a single source-sink-sanitizer abstraction. We therefore separate case facts, semantic structure, logical verification plans, and backend lowering into distinct layers. We further introduce a typed Schema IR with vulnerability-specific subtypes, enabling more precise modeling of taint-flow vulnerabilities, missing validation flaws, incomplete security policies, unsafe defaults, authorization bypasses, and state or lifecycle violations.
+We define a four-layer intermediate representation (IR) for synthesizing CodeQL queries from CVE descriptions, patch evidence, and code-level artifacts. The core motivation is that many vulnerability classes cannot be faithfully represented by a single source-sink-sanitizer abstraction. We therefore separate case facts, semantic structure, query-construction steps, and backend lowering into distinct layers. We further introduce a typed Schema IR with vulnerability-specific subtypes, enabling more precise modeling of taint-flow vulnerabilities, missing validation flaws, incomplete security policies, unsafe defaults, authorization bypasses, and state or lifecycle violations.
 
 ## 1. Introduction
 
@@ -26,7 +26,7 @@ where:
 
 - `L1` is the Vulnerability Fact Layer
 - `L2` is the Semantic Schema IR Layer
-- `L3` is the Logic Plan IR Layer
+- `L3` is the Query Construction Steps Layer
 - `L4` is the Backend Lowering IR Layer
 
 We impose a strict dependency order:
@@ -43,7 +43,7 @@ Let:
 
 - `F` denote observable facts
 - `S` denote semantic objects and relations
-- `P` denote logic plans
+- `P` denote query-construction step sets
 - `B` denote backend lowering specifications
 
 Then:
@@ -242,46 +242,48 @@ For `T = state_or_lifecycle_violation`, the minimal schema is:
 L2_slv = (Resource, StateTransition, UnsafeAction, StateConstraint)
 ```
 
-## 6. Logic Plan IR
+## 6. Query Construction Steps Layer
 
-We define the logic plan layer as:
+We define the query-construction layer as:
 
 ```text
-L3 = (Goal, Steps, Dep)
+L3 = (Goal, Steps)
 ```
 
 where:
 
-- `Goal` is the verification objective
-- `Steps` is a finite set of logic steps
-- `Dep` is a dependency relation over `Steps`
+- `Goal` is the construction objective
+- `Steps` is a finite set of semantic-unit steps
 
 Each step is a tuple:
 
 ```text
-step = (id, kind, In, Out, Op, Crit, Fail)
+step = (id, u, d, R, In, Out, t, H, Exp)
 ```
 
 where:
 
-- `kind` is one of
+- `u` is the semantic unit type
+- `d` is a natural-language description
+- `R` is a set of references into `L2`
+- `In` is the required symbol set
+- `Out` is the produced symbol set
+- `t` is the fragment type
+- `H` is the retrieval-hint bundle
+- `Exp` is the expected output contract
+
+Unlike a symbolic execution plan, `L3` is not required to form a DAG. Its purpose is not to encode a fully executable proof strategy, but to decompose `L2` into retrievable and composable semantic units. A step is considered well-formed if it can be translated into one of a small number of code-fragment classes, such as:
 
 ```text
-locate, bind, derive, relate, constrain, exclude, report
+helper_predicate, relation_predicate, constraint_fragment,
+where_clause, select_clause, query_skeleton
 ```
 
-- `In` is the input symbol set
-- `Out` is the output symbol set
-- `Op` is the symbolic operation
-- `Crit` is the success criterion
-- `Fail` is the failure mode
+This yields three important properties:
 
-We require that `(Steps, Dep)` form a DAG.
-
-This yields two important properties:
-
-1. the plan is machine-executable
-2. the plan remains backend-independent
+1. each step can be used as a retrieval query for CodeQL knowledge
+2. each step can be translated into an independent query fragment
+3. the overall layer remains backend-independent at the semantic level
 
 ## 7. Backend Lowering IR
 
@@ -347,15 +349,15 @@ Then the vulnerable condition is:
 uses_policy(C, P) and checks(C, S) and missing(P, R)
 ```
 
-The corresponding logic plan can be expressed as:
+The corresponding query-construction steps can be expressed as:
 
 1. locate the policy artifact `P`
 2. locate the policy check `C`
-3. prove `uses_policy(C, P)`
-4. prove `missing(P, R)`
-5. report the violation at `P` or `C`
+3. construct a fragment linking `C` to `P`
+4. construct a fragment enforcing `missing(P, R)`
+5. construct a reporting fragment anchored at `P`
 
-This plan does not require a path-problem encoding unless additional provenance evidence is desired.
+These steps are intended to drive retrieval and fragment generation rather than to encode a strict proof DAG. They do not require a path-problem encoding unless additional provenance evidence is desired.
 
 ## 10. Design Invariants
 
@@ -363,10 +365,10 @@ We require the following invariants:
 
 1. `L1` contains facts, not backend logic.
 2. `L2` contains semantics, not executable query code.
-3. `L3` contains verification structure, not backend syntax.
+3. `L3` contains semantic-unit construction steps, not backend syntax.
 4. `L4` contains lowering strategy, not new vulnerability semantics.
 5. Every inferred semantic object in `L2` should be traceable to evidence from `L1`.
 
 ## 11. Conclusion
 
-The proposed four-layer IR separates evidence, semantics, logical planning, and backend realization. Its key novelty lies in the typed Schema IR, which avoids overfitting all vulnerabilities to taint-style abstractions. This improves fidelity for non-taint vulnerabilities such as incomplete policy enforcement, unsafe defaults, and authorization failures, while still supporting classical source-sink-sanitizer modeling where appropriate.
+The proposed four-layer IR separates evidence, semantics, query construction, and backend realization. Its key novelty lies in the typed Schema IR and the semantic-unit-based `L3`, which avoid overfitting all vulnerabilities to taint-style abstractions or compiler-like proof plans. This improves fidelity for non-taint vulnerabilities such as incomplete policy enforcement, unsafe defaults, and authorization failures, while still supporting classical source-sink-sanitizer modeling where appropriate.

@@ -1,0 +1,243 @@
+{
+  "layer": "L3_query_construction_steps",
+  "plan_version": "1.0",
+  "case_id": "CVE-2025-27818",
+  "goal": "Decompose the incomplete default denylist vulnerability into retrievable and composable CodeQL query units.",
+  "steps": [
+    {
+      "step_id": "step_locate_policy_default",
+      "semantic_unit": "policy_binding",
+      "goal": "Locate the default denylist policy artifact",
+      "description": "Find the field, constant, or literal that defines the default value of the disallowed login modules configuration key. This step should bind the vulnerable default policy artifact rather than the runtime override branch.",
+      "l2_refs": [
+        "ent_policy_default",
+        "ent_policy_key"
+      ],
+      "requires_symbols": [],
+      "produces_symbols": [
+        "policyDefaultExpr"
+      ],
+      "fragment_type": "predicate",
+      "retrieval_hints": {
+        "keywords": [
+          "System.getProperty default value",
+          "default denylist constant",
+          "field initializer",
+          "string literal argument"
+        ],
+        "candidate_classes": [
+          "MethodAccess",
+          "StringLiteral",
+          "Field",
+          "FieldAccess",
+          "Expr"
+        ],
+        "candidate_predicates": [
+          "hasQualifiedName",
+          "getArgument",
+          "getValue",
+          "getInitializer"
+        ],
+        "reference_query_patterns": [
+          "API argument matching",
+          "constant binding",
+          "field or literal value matching"
+        ]
+      },
+      "expected_output": "A helper predicate that binds the default denylist definition or its referenced field value."
+    },
+    {
+      "step_id": "step_locate_policy_check",
+      "semantic_unit": "check_binding",
+      "goal": "Locate the denylist membership check",
+      "description": "Find the Set.contains-style membership test that compares the trimmed login module name against the disallowed login module set inside the JAAS validation logic.",
+      "l2_refs": [
+        "ent_policy_check",
+        "ent_subject_login_module"
+      ],
+      "requires_symbols": [],
+      "produces_symbols": [
+        "policyCheckCall",
+        "loginModuleExpr"
+      ],
+      "fragment_type": "predicate",
+      "retrieval_hints": {
+        "keywords": [
+          "Set.contains membership check",
+          "login module denylist check",
+          "trimmed login module name"
+        ],
+        "candidate_classes": [
+          "MethodAccess",
+          "Expr"
+        ],
+        "candidate_predicates": [
+          "hasQualifiedName",
+          "getArgument",
+          "getQualifier"
+        ],
+        "reference_query_patterns": [
+          "method call matching",
+          "membership test matching",
+          "guard condition matching"
+        ]
+      },
+      "expected_output": "A helper predicate that binds the denylist membership check and the expression being checked."
+    },
+    {
+      "step_id": "step_relate_policy_to_check",
+      "semantic_unit": "policy_check_relation",
+      "goal": "Relate the default policy artifact to the membership check",
+      "description": "Generate a fragment showing that the collection used by the membership check is derived from System.getProperty(DISALLOWED_LOGIN_MODULES_CONFIG, DISALLOWED_LOGIN_MODULES_DEFAULT), including the split, trim, and collect pipeline if needed.",
+      "l2_refs": [
+        "rel_policy_read_uses_default"
+      ],
+      "requires_symbols": [
+        "policyDefaultExpr",
+        "policyCheckCall"
+      ],
+      "produces_symbols": [
+        "validatedPolicyCheck"
+      ],
+      "fragment_type": "predicate",
+      "retrieval_hints": {
+        "keywords": [
+          "local data flow from default value to contains qualifier",
+          "split trim collect toSet",
+          "collection derived from system property default"
+        ],
+        "candidate_classes": [
+          "DataFlow",
+          "MethodAccess",
+          "Expr"
+        ],
+        "candidate_predicates": [
+          "localFlow",
+          "getQualifier",
+          "getArgument"
+        ],
+        "reference_query_patterns": [
+          "local data flow",
+          "derived collection matching",
+          "helper predicate for qualifier provenance"
+        ]
+      },
+      "expected_output": "A helper predicate that connects the default policy artifact to the denylist membership check."
+    },
+    {
+      "step_id": "step_constrain_incomplete_policy",
+      "semantic_unit": "policy_completeness_constraint",
+      "goal": "Constrain the default policy to be incomplete",
+      "description": "Generate a value-filtering fragment that requires the default denylist artifact to omit the required blocked member LdapLoginModule. This step should encode the vulnerability-defining absence condition.",
+      "l2_refs": [
+        "con_missing_required_member",
+        "guard_policy_contains_required_member"
+      ],
+      "requires_symbols": [
+        "policyDefaultExpr"
+      ],
+      "produces_symbols": [
+        "incompletePolicyDefault"
+      ],
+      "fragment_type": "where_clause",
+      "retrieval_hints": {
+        "keywords": [
+          "string containment check",
+          "missing denylist member",
+          "negative value constraint",
+          "policy completeness"
+        ],
+        "candidate_classes": [
+          "StringLiteral",
+          "Expr"
+        ],
+        "candidate_predicates": [
+          "getValue",
+          "matches",
+          "regexpMatch"
+        ],
+        "reference_query_patterns": [
+          "string value filtering",
+          "negative membership constraint",
+          "literal does not contain token"
+        ]
+      },
+      "expected_output": "A where-clause or helper predicate that constrains the default policy to omit LdapLoginModule."
+    },
+    {
+      "step_id": "step_model_runtime_branch",
+      "semantic_unit": "default_branch_scope",
+      "goal": "Model the vulnerable runtime branch",
+      "description": "Generate a fragment that keeps the query focused on the branch where the default denylist is actually used rather than a complete custom override of the disallowed login modules system property.",
+      "l2_refs": [
+        "con_default_branch_active",
+        "env_property_not_overridden"
+      ],
+      "requires_symbols": [
+        "policyDefaultExpr",
+        "validatedPolicyCheck"
+      ],
+      "produces_symbols": [
+        "defaultBranchCheck"
+      ],
+      "fragment_type": "where_clause",
+      "retrieval_hints": {
+        "keywords": [
+          "System.getProperty fallback branch",
+          "default argument branch",
+          "distinguish override from default value"
+        ],
+        "candidate_classes": [
+          "MethodAccess",
+          "Expr"
+        ],
+        "candidate_predicates": [
+          "getArgument",
+          "hasQualifiedName"
+        ],
+        "reference_query_patterns": [
+          "default branch modeling",
+          "fallback value binding"
+        ]
+      },
+      "expected_output": "A fragment that ensures the reported check is tied to the default-value branch."
+    },
+    {
+      "step_id": "step_report_violation",
+      "semantic_unit": "alert_reporting",
+      "goal": "Report the incomplete security policy",
+      "description": "Assemble the final from/where/select skeleton that reports the incomplete default denylist at the policy definition site, using the policy artifact as the alert anchor and mentioning the missing blocked member.",
+      "l2_refs": [
+        "report_policy_default"
+      ],
+      "requires_symbols": [
+        "policyDefaultExpr",
+        "validatedPolicyCheck",
+        "incompletePolicyDefault",
+        "defaultBranchCheck"
+      ],
+      "produces_symbols": [
+        "finalQuery"
+      ],
+      "fragment_type": "select_clause",
+      "retrieval_hints": {
+        "keywords": [
+          "CodeQL problem query select clause",
+          "report literal or field definition",
+          "security policy incomplete message"
+        ],
+        "candidate_classes": [
+          "Expr",
+          "Field"
+        ],
+        "candidate_predicates": [],
+        "reference_query_patterns": [
+          "problem query reporting",
+          "select anchor on field or literal",
+          "alert message with missing token"
+        ]
+      },
+      "expected_output": "A final query skeleton that reports the incomplete default denylist using the policy definition as the primary result location."
+    }
+  ]
+}

@@ -1,49 +1,161 @@
 {
   "cve_id": "CVE-2025-27818",
+  "layer": "L3_query_construction_steps",
+  "plan_version": "1.0",
   "title": "Apache Kafka — LdapLoginModule not blocked in default JAAS denylist",
   "query_goal": "Detect cases where the default JAAS login-module denylist does not include LdapLoginModule, allowing an attacker who controls JAAS config to force an outbound LDAP connection to an arbitrary server.",
   "steps": [
     {
-      "step_id": 1,
-      "name": "Locate the denylist default-value string literal",
-      "description": "Find every string literal that is used as the second argument (defaultValue) of a System.getProperty() call whose first argument is the disallowed-login-modules config key ('org.apache.kafka.disallowed.login.modules'). This literal is the fallback denylist when no system property has been set.",
-      "codeql_sketch": "from MethodAccess ma, StringLiteral defaultVal\nwhere ma.getMethod().hasQualifiedName(\"java.lang\", \"System\", \"getProperty\")\n  and ma.getArgument(0).(StringLiteral).getValue() = \"org.apache.kafka.disallowed.login.modules\"\n  and defaultVal = ma.getArgument(1)\nselect defaultVal, defaultVal.getValue()"
+      "step_id": "step_locate_policy_default",
+      "semantic_unit": "policy_binding",
+      "goal": "Locate the default denylist policy artifact",
+      "description": "Bind the constant, field, or literal used as the default value of the disallowed login modules configuration.",
+      "l2_refs": ["ent_policy_default", "ent_policy_key"],
+      "requires_symbols": [],
+      "produces_symbols": ["policyDefaultExpr"],
+      "fragment_type": "predicate",
+      "retrieval_hints": {
+        "keywords": [
+          "System.getProperty default value",
+          "default denylist constant",
+          "field initializer",
+          "string literal argument"
+        ],
+        "candidate_classes": [
+          "MethodAccess",
+          "StringLiteral",
+          "Field"
+        ],
+        "candidate_predicates": [
+          "hasQualifiedName",
+          "getArgument",
+          "getValue"
+        ],
+        "reference_query_patterns": [
+          "API argument matching",
+          "constant binding"
+        ]
+      },
+      "expected_output": "A helper predicate that binds the default denylist definition."
     },
     {
-      "step_id": 2,
-      "name": "Check completeness of the denylist default value",
-      "description": "For each default-value string found in step 1, verify whether it contains the string 'LdapLoginModule'. A default value that omits this token is incomplete and constitutes the vulnerable condition. Also handle the case where the default value is held in a static-final field rather than an inline literal (trace through field reads).",
-      "codeql_sketch": "// After extracting the value in step 1:\nwhere not defaultVal.getValue().matches(\"%LdapLoginModule%\")\nselect defaultVal, \"Denylist default does not include LdapLoginModule\""
+      "step_id": "step_locate_policy_check",
+      "semantic_unit": "check_binding",
+      "goal": "Locate the denylist membership check",
+      "description": "Find the membership test that checks whether the login module name is contained in the disallowed login module set.",
+      "l2_refs": ["ent_policy_check", "ent_subject_login_module"],
+      "requires_symbols": [],
+      "produces_symbols": ["policyCheckCall", "loginModuleExpr"],
+      "fragment_type": "predicate",
+      "retrieval_hints": {
+        "keywords": [
+          "Set.contains membership check",
+          "login module name check",
+          "security policy check"
+        ],
+        "candidate_classes": [
+          "MethodAccess",
+          "Expr"
+        ],
+        "candidate_predicates": [
+          "hasQualifiedName",
+          "getArgument"
+        ],
+        "reference_query_patterns": [
+          "method call matching",
+          "membership test matching"
+        ]
+      },
+      "expected_output": "A helper predicate that binds the policy check call and the checked login module expression."
     },
     {
-      "step_id": 3,
-      "name": "Identify the login-module name source (untrusted input)",
-      "description": "Find every call to AppConfigurationEntry.getLoginModuleName(). The return value is the class name supplied by whoever controls the JAAS configuration file or the sasl.jaas.config property — it is attacker-controllable.",
-      "codeql_sketch": "from MethodAccess getModuleName\nwhere getModuleName.getMethod().hasQualifiedName(\n        \"javax.security.auth.login\", \"AppConfigurationEntry\", \"getLoginModuleName\")\nselect getModuleName"
+      "step_id": "step_relate_check_to_policy",
+      "semantic_unit": "policy_check_relation",
+      "goal": "Relate the policy check to the default denylist artifact",
+      "description": "Generate a fragment that constrains the denylist set used in the membership check to be derived from the default policy value.",
+      "l2_refs": ["rel_check_uses_policy"],
+      "requires_symbols": ["policyDefaultExpr", "policyCheckCall"],
+      "produces_symbols": ["validatedPolicyCheck"],
+      "fragment_type": "predicate",
+      "retrieval_hints": {
+        "keywords": [
+          "local data flow from default value to contains qualifier",
+          "collection built from split trim collect toSet",
+          "derived from policy default"
+        ],
+        "candidate_classes": [
+          "DataFlow",
+          "MethodAccess",
+          "Expr"
+        ],
+        "candidate_predicates": [
+          "localFlow",
+          "getQualifier",
+          "getArgument"
+        ],
+        "reference_query_patterns": [
+          "local data flow",
+          "collection derivation"
+        ]
+      },
+      "expected_output": "A helper predicate that proves the check uses the default policy value."
     },
     {
-      "step_id": 4,
-      "name": "Find the security-check sink (denylist membership test)",
-      "description": "Identify the point where the login-module name is tested against the denylist. Typically this is a Set<String>.contains(loginModuleName) call that follows the split/trim pipeline applied to the System.getProperty result. This is the sink: if the denylist reaching this check is incomplete, the check is ineffective.",
-      "codeql_sketch": "from MethodAccess containsCall\nwhere containsCall.getMethod().hasQualifiedName(\"java.util\", \"Set\", \"contains\")\n  // argument is the (trimmed) login module name\nselect containsCall"
+      "step_id": "step_constrain_missing_member",
+      "semantic_unit": "policy_completeness_constraint",
+      "goal": "Constrain the default policy to be incomplete",
+      "description": "Generate a constraint fragment requiring that the default denylist does not contain the required blocked member LdapLoginModule.",
+      "l2_refs": ["con_missing_required_member", "guard_policy_contains_required_member"],
+      "requires_symbols": ["policyDefaultExpr"],
+      "produces_symbols": ["incompletePolicyDefault"],
+      "fragment_type": "where_clause",
+      "retrieval_hints": {
+        "keywords": [
+          "string containment check",
+          "missing denylist member",
+          "default policy completeness"
+        ],
+        "candidate_classes": [
+          "StringLiteral",
+          "Expr"
+        ],
+        "candidate_predicates": [
+          "getValue",
+          "matches",
+          "regexpMatch"
+        ],
+        "reference_query_patterns": [
+          "string value filtering",
+          "negative membership constraint"
+        ]
+      },
+      "expected_output": "A where-clause fragment that constrains the policy default to omit the required blocked member."
     },
     {
-      "step_id": 5,
-      "name": "Build a local data-flow / taint path from denylist construction to the contains() check",
-      "description": "Trace how the System.getProperty() return value flows into the Set that is tested at the sink. The pipeline is: getProperty → split(\",\") → stream().map(trim) → collect(toSet()) → set.contains(loginModuleName). Confirm that the Set used in the contains() call was built from the incomplete default string identified in step 2.",
-      "codeql_sketch": "import DataFlow::PathGraph\nclass DenylistFlow extends DataFlow::Configuration {\n  override predicate isSource(DataFlow::Node n) {\n    // System.getProperty call with the config key and a default lacking LdapLoginModule\n    ...\n  }\n  override predicate isSink(DataFlow::Node n) {\n    // qualifier of Set.contains() call\n    ...\n  }\n}\nfrom DenylistFlow cfg, DataFlow::PathNode src, DataFlow::PathNode sink\nwhere cfg.hasFlowPath(src, sink)\nselect sink, src, sink, \"Incomplete denylist flows to security check\""
-    },
-    {
-      "step_id": 6,
-      "name": "Confirm that the login-module name reaches the same contains() check (source → sink taint)",
-      "description": "Using a taint-tracking configuration, verify that the result of getLoginModuleName() (step 3) reaches the argument of the contains() call (step 4). Combined with step 5, this confirms the full vulnerable path: untrusted module name is compared to an incomplete denylist.",
-      "codeql_sketch": "class ModuleNameTaint extends TaintTracking::Configuration {\n  override predicate isSource(DataFlow::Node n) {\n    n.asExpr() instanceof getModuleNameCall\n  }\n  override predicate isSink(DataFlow::Node n) {\n    // argument to Set.contains() that is the security check\n    exists(MethodAccess ma |\n      ma.getMethod().hasQualifiedName(\"java.util\", \"Set\", \"contains\")\n      and n.asExpr() = ma.getArgument(0))\n  }\n}"
-    },
-    {
-      "step_id": 7,
-      "name": "Compose final query and emit alert",
-      "description": "Combine all previous predicates: a denylist default string that is missing LdapLoginModule (steps 1-2), a login-module name source (step 3), an incomplete denylist flowing to the security-check Set (step 5), and the module name flowing to the contains() argument (step 6). Emit an alert with the location of the incomplete default-value literal.",
-      "codeql_sketch": "from StringLiteral incompleteDenylist, MethodAccess containsCheck\nwhere incompleteDenylistFlowsTo(incompleteDenylist, containsCheck)\n  and moduleNameReaches(containsCheck)\n  and not incompleteDenylist.getValue().matches(\"%LdapLoginModule%\")\nselect incompleteDenylist,\n  \"Default denylist '\" + incompleteDenylist.getValue() +\n  \"' does not block LdapLoginModule; an attacker-controlled JAAS config can use it to reach an arbitrary LDAP server.\""
+      "step_id": "step_report_violation",
+      "semantic_unit": "alert_reporting",
+      "goal": "Report the incomplete security policy",
+      "description": "Generate the final query skeleton and select clause that reports the incomplete default denylist at the policy definition site.",
+      "l2_refs": ["report_policy_default"],
+      "requires_symbols": ["policyDefaultExpr", "validatedPolicyCheck", "incompletePolicyDefault"],
+      "produces_symbols": ["finalQuery"],
+      "fragment_type": "select_clause",
+      "retrieval_hints": {
+        "keywords": [
+          "CodeQL alert message",
+          "problem query select clause",
+          "report location anchor"
+        ],
+        "candidate_classes": [
+          "Expr"
+        ],
+        "candidate_predicates": [],
+        "reference_query_patterns": [
+          "problem query reporting",
+          "select anchor on literal or field"
+        ]
+      },
+      "expected_output": "A final from/where/select skeleton that reports the violation using the policy default as the alert anchor."
     }
   ]
 }

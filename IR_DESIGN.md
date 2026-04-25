@@ -17,7 +17,7 @@ The representation is divided into four layers:
 
 1. `L1: Vulnerability Fact Layer`
 2. `L2: Semantic Schema IR Layer`
-3. `L3: Logic Plan IR Layer`
+3. `L3: Query Construction Steps Layer`
 4. `L4: Backend Lowering IR Layer`
 
 The dependency is strictly one-way:
@@ -30,8 +30,8 @@ Each layer has a distinct responsibility:
 
 - `L1` records case facts and patch evidence.
 - `L2` models the vulnerability semantics in a backend-independent way.
-- `L3` defines how those semantics should be validated in code.
-- `L4` lowers the logic plan into CodeQL-specific constructs.
+- `L3` decomposes those semantics into retrievable and composable query units.
+- `L4` lowers the query construction steps into CodeQL-specific constructs.
 
 ## 3. Layer Definitions
 
@@ -148,18 +148,24 @@ Recommended top-level pattern types:
 - `authorization_bypass`
 - `state_or_lifecycle_violation`
 
-### 3.3 L3: Logic Plan IR Layer
+### 3.3 L3: Query Construction Steps Layer
 
-`L3` defines the verification plan as a DAG of logical steps. It should describe how to validate the semantics in `L2`, but it should not contain full CodeQL code.
+`L3` is not a full symbolic verification DAG. Instead, it defines a set of query construction steps, where each step corresponds to one complete semantic unit that can be independently retrieved, translated into a CodeQL fragment, and later composed into a full query.
+
+The role of `L3` is therefore threefold:
+
+- provide retrieval intent for vector search and official-query lookup
+- provide natural-language guidance for fragment generation
+- provide lightweight symbol interfaces for fragment composition
 
 Base structure:
 
 ```json
 {
-  "layer": "L3_logic_plan",
+  "layer": "L3_query_construction_steps",
   "plan_version": "1.0",
   "case_id": "CVE-2025-27818",
-  "goal": "prove violation of L2 constraints",
+  "goal": "decompose L2 semantics into retrievable and composable query units",
   "steps": []
 }
 ```
@@ -168,38 +174,37 @@ Each step should include:
 
 ```json
 {
-  "id": "step_id",
-  "kind": "locate|bind|derive|relate|constrain|exclude|report",
-  "intent": "string",
-  "inputs": ["symbol_or_entity_id"],
-  "outputs": ["symbol_or_entity_id"],
-  "depends_on": ["step_id"],
-  "operation": {
-    "type": "symbolic_operation_type",
-    "selector": {},
-    "filters": [],
-    "join_conditions": []
+  "step_id": "step_id",
+  "semantic_unit": "string",
+  "goal": "string",
+  "description": "string",
+  "l2_refs": ["entity_or_relation_or_constraint_id"],
+  "requires_symbols": ["symbol_name"],
+  "produces_symbols": ["symbol_name"],
+  "fragment_type": "predicate|where_clause|helper_class|select_clause|query_skeleton",
+  "retrieval_hints": {
+    "keywords": ["string"],
+    "candidate_classes": ["string"],
+    "candidate_predicates": ["string"],
+    "reference_query_patterns": ["string"]
   },
-  "success_criterion": "string",
-  "failure_mode": "string"
+  "expected_output": "string"
 }
 ```
 
-Recommended step kinds:
+Recommended design rules for a step:
 
-- `locate`
-- `bind`
-- `derive`
-- `relate`
-- `constrain`
-- `exclude`
-- `report`
+- one step should correspond to one complete semantic unit rather than one raw field
+- one step should usually map to one helper predicate, one relation predicate, one constraint fragment, or one reporting fragment
+- `description` should be natural-language friendly for LLMs
+- `retrieval_hints` should guide vector retrieval and official-query retrieval
+- `requires_symbols` and `produces_symbols` should expose a lightweight fragment interface
 
 Constraints:
 
 - `L3` should not embed full backend code.
-- `L3` should make dependencies explicit.
-- `L3` should be machine-plannable and machine-reorderable.
+- `L3` should remain backend-independent.
+- `L3` should be fragment-oriented rather than execution-plan oriented.
 
 ### 3.4 L4: Backend Lowering IR Layer
 
@@ -445,59 +450,161 @@ Example `L3` fragment:
 
 ```json
 {
-  "layer": "L3_logic_plan",
+  "layer": "L3_query_construction_steps",
   "plan_version": "1.0",
   "goal": "detect incomplete denylist default used in login-module policy check",
   "steps": [
     {
-      "id": "locate_policy_default",
-      "kind": "locate",
-      "inputs": [],
-      "outputs": ["policy_default_binding"],
-      "depends_on": [],
-      "operation": {
-        "type": "locate_policy_artifact"
-      }
+      "step_id": "step_locate_policy_default",
+      "semantic_unit": "policy_binding",
+      "goal": "Locate the default denylist policy artifact",
+      "description": "Bind the constant, field, or literal used as the default value of the disallowed login modules configuration.",
+      "l2_refs": ["ent_policy_default", "ent_policy_key"],
+      "requires_symbols": [],
+      "produces_symbols": ["policyDefaultExpr"],
+      "fragment_type": "predicate",
+      "retrieval_hints": {
+        "keywords": [
+          "System.getProperty default value",
+          "default denylist constant",
+          "field initializer",
+          "string literal argument"
+        ],
+        "candidate_classes": [
+          "MethodAccess",
+          "StringLiteral",
+          "Field"
+        ],
+        "candidate_predicates": [
+          "hasQualifiedName",
+          "getArgument",
+          "getValue"
+        ],
+        "reference_query_patterns": [
+          "API argument matching",
+          "constant binding"
+        ]
+      },
+      "expected_output": "A helper predicate that binds the default denylist definition."
     },
     {
-      "id": "locate_policy_check",
-      "kind": "locate",
-      "inputs": [],
-      "outputs": ["policy_check_binding"],
-      "depends_on": [],
-      "operation": {
-        "type": "locate_check"
-      }
+      "step_id": "step_locate_policy_check",
+      "semantic_unit": "check_binding",
+      "goal": "Locate the denylist membership check",
+      "description": "Find the membership test that checks whether the login module name is contained in the disallowed login module set.",
+      "l2_refs": ["ent_policy_check", "ent_subject_login_module"],
+      "requires_symbols": [],
+      "produces_symbols": ["policyCheckCall", "loginModuleExpr"],
+      "fragment_type": "predicate",
+      "retrieval_hints": {
+        "keywords": [
+          "Set.contains membership check",
+          "login module name check",
+          "security policy check"
+        ],
+        "candidate_classes": [
+          "MethodAccess",
+          "Expr"
+        ],
+        "candidate_predicates": [
+          "hasQualifiedName",
+          "getArgument"
+        ],
+        "reference_query_patterns": [
+          "method call matching",
+          "membership test matching"
+        ]
+      },
+      "expected_output": "A helper predicate that binds the policy check call and the checked login module expression."
     },
     {
-      "id": "relate_check_to_policy",
-      "kind": "relate",
-      "inputs": ["policy_default_binding", "policy_check_binding"],
-      "outputs": ["validated_policy_check_pair"],
-      "depends_on": ["locate_policy_default", "locate_policy_check"],
-      "operation": {
-        "type": "prove_policy_used_by_check"
-      }
+      "step_id": "step_relate_check_to_policy",
+      "semantic_unit": "policy_check_relation",
+      "goal": "Relate the policy check to the default denylist artifact",
+      "description": "Generate a fragment that constrains the denylist set used in the membership check to be derived from the default policy value.",
+      "l2_refs": ["rel_check_uses_policy"],
+      "requires_symbols": ["policyDefaultExpr", "policyCheckCall"],
+      "produces_symbols": ["validatedPolicyCheck"],
+      "fragment_type": "predicate",
+      "retrieval_hints": {
+        "keywords": [
+          "local data flow from default value to contains qualifier",
+          "collection built from split trim collect toSet",
+          "derived from policy default"
+        ],
+        "candidate_classes": [
+          "DataFlow",
+          "MethodAccess",
+          "Expr"
+        ],
+        "candidate_predicates": [
+          "localFlow",
+          "getQualifier",
+          "getArgument"
+        ],
+        "reference_query_patterns": [
+          "local data flow",
+          "collection derivation"
+        ]
+      },
+      "expected_output": "A helper predicate that proves the check uses the default policy value."
     },
     {
-      "id": "constrain_missing_member",
-      "kind": "constrain",
-      "inputs": ["validated_policy_check_pair"],
-      "outputs": ["violating_policy_check_pair"],
-      "depends_on": ["relate_check_to_policy"],
-      "operation": {
-        "type": "prove_required_member_absent"
-      }
+      "step_id": "step_constrain_missing_member",
+      "semantic_unit": "policy_completeness_constraint",
+      "goal": "Constrain the default policy to be incomplete",
+      "description": "Generate a constraint fragment requiring that the default denylist does not contain the required blocked member LdapLoginModule.",
+      "l2_refs": ["con_missing_required_member", "guard_policy_contains_required_member"],
+      "requires_symbols": ["policyDefaultExpr"],
+      "produces_symbols": ["incompletePolicyDefault"],
+      "fragment_type": "where_clause",
+      "retrieval_hints": {
+        "keywords": [
+          "string containment check",
+          "missing denylist member",
+          "default policy completeness"
+        ],
+        "candidate_classes": [
+          "StringLiteral",
+          "Expr"
+        ],
+        "candidate_predicates": [
+          "getValue",
+          "matches",
+          "regexpMatch"
+        ],
+        "reference_query_patterns": [
+          "string value filtering",
+          "negative membership constraint"
+        ]
+      },
+      "expected_output": "A where-clause fragment that constrains the policy default to omit the required blocked member."
     },
     {
-      "id": "report_violation",
-      "kind": "report",
-      "inputs": ["violating_policy_check_pair"],
-      "outputs": ["alert"],
-      "depends_on": ["constrain_missing_member"],
-      "operation": {
-        "type": "emit_alert"
-      }
+      "step_id": "step_report_violation",
+      "semantic_unit": "alert_reporting",
+      "goal": "Report the incomplete security policy",
+      "description": "Generate the final query skeleton and select clause that reports the incomplete default denylist at the policy definition site.",
+      "l2_refs": ["report_policy_default"],
+      "requires_symbols": ["policyDefaultExpr", "validatedPolicyCheck", "incompletePolicyDefault"],
+      "produces_symbols": ["finalQuery"],
+      "fragment_type": "select_clause",
+      "retrieval_hints": {
+        "keywords": [
+          "CodeQL alert message",
+          "problem query select clause",
+          "report location anchor"
+        ],
+        "candidate_classes": [
+          "Expr"
+        ],
+        "candidate_predicates": [],
+        "reference_query_patterns": [
+          "problem query reporting",
+          "select anchor on literal or field"
+        ]
+      },
+      "expected_output": "A final from/where/select skeleton that reports the violation using the policy default as the alert anchor."
     }
   ]
 }
@@ -507,7 +614,7 @@ Example `L3` fragment:
 
 The following rules should hold across the whole system:
 
-1. Facts, semantics, logic, and backend code generation must be separated.
+1. Facts, semantics, query-construction steps, and backend code generation must be separated.
 2. `pattern_type` determines the required shape of `L2`.
 3. `L3` must remain backend-independent.
 4. `L4` must not reinterpret the vulnerability.
@@ -519,7 +626,7 @@ For each CVE, the representation can be stored as:
 
 - `cve_facts.json`
 - `schema_ir.json`
-- `logic_plan.json`
+- `query_construction_steps.json`
 - `backend_codeql.json`
 
 This layout corresponds directly to the four layers and keeps responsibilities explicit.
