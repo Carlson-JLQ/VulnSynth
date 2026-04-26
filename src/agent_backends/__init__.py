@@ -83,22 +83,65 @@ class AgentBackend(ABC):
         """Best-effort cleanup of MCP server processes."""
         import asyncio
 
-        for pattern in [
-            "pkill -f 'chroma-mcp'",
-            "pkill -f 'codeql-mcp/dist/index.js'",
-            "pkill -f 'codeql.*language-server'",
-        ]:
+        patterns = [
+            "chroma-mcp",
+            "codeql-lsp-mcp/dist/index.js",
+            "codeql.*language-server",
+        ]
+
+        async def _run_shell(cmd: str) -> tuple[int, str, str]:
+            proc = await asyncio.create_subprocess_shell(
+                cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+            return (
+                proc.returncode,
+                stdout.decode("utf-8", errors="replace"),
+                stderr.decode("utf-8", errors="replace"),
+            )
+
+        for pattern in patterns:
             try:
-                p = await asyncio.create_subprocess_shell(
-                    pattern,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                await p.communicate()
+                await _run_shell(f"pkill -TERM -f '{pattern}' || true")
             except Exception:
                 pass
 
-        self.logger.info("MCP servers cleanup completed")
+        await asyncio.sleep(1.5)
+
+        for pattern in patterns:
+            try:
+                rc, stdout, _ = await _run_shell(f"pgrep -af '{pattern}' || true")
+                survivors = [line.strip() for line in stdout.splitlines() if line.strip()]
+                if survivors:
+                    self.logger.warning(
+                        f"Cleanup survivors after TERM for pattern '{pattern}': "
+                        + " | ".join(survivors[:10])
+                    )
+                    await _run_shell(f"pkill -KILL -f '{pattern}' || true")
+            except Exception:
+                pass
+
+        await asyncio.sleep(0.5)
+
+        zombie_check_cmd = (
+            "ps -eo ppid,pid,stat,command | "
+            "grep -E 'chroma-mcp|codeql-lsp-mcp/dist/index.js|codeql.*language-server' | "
+            "grep -v grep || true"
+        )
+        try:
+            _, stdout, _ = await _run_shell(zombie_check_cmd)
+            lines = [line.strip() for line in stdout.splitlines() if line.strip()]
+            if lines:
+                self.logger.warning(
+                    "Post-cleanup process snapshot (zombies with PPID=1 cannot be force-removed): "
+                    + " | ".join(lines[:20])
+                )
+        except Exception:
+            pass
+
+        self.logger.info("MCP/LSP cleanup completed")
 
 
 def create_backend(agent_type: str, model: str, logger: logging.Logger,

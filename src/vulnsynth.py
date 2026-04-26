@@ -113,6 +113,118 @@ class VulnSynthTask:
     nvd_cache: str = NVD_CACHE
 
 
+@dataclass
+class StageSessionTurn:
+    step_name: str
+    prompt_path: str
+    raw_output_path: str
+    parsed_output_path: Optional[str]
+    parsed_output: Optional[Dict[str, Any]]
+    assistant_text_path: str
+    assistant_text: str
+
+
+class StageSession:
+    """
+    Stage-scoped session wrapper.
+
+    Prefer native Codex thread resumption when available, and fall back
+    to virtual prompt replay when a native thread has not been established.
+    """
+
+    def __init__(self, session_name: str, session_dir: str):
+        self.session_name = session_name
+        self.session_dir = session_dir
+        self.turns: list[StageSessionTurn] = []
+        self.native_thread_id: Optional[str] = None
+        os.makedirs(self.session_dir, exist_ok=True)
+
+    def build_prompt(self, task_prompt: str) -> str:
+        if self.native_thread_id:
+            return task_prompt
+        if not self.turns:
+            return task_prompt
+
+        lines = [
+            f"# Session Context: {self.session_name}",
+            "You are continuing the same stage-scoped workflow.",
+            "Use the previous structured outputs as authoritative context.",
+            "Do not repeat prior work unless necessary for consistency.",
+            "",
+            "## Prior Turns",
+        ]
+
+        for index, turn in enumerate(self.turns, start=1):
+            lines.append(f"### Turn {index}: {turn.step_name}")
+            if turn.parsed_output is not None:
+                parsed_json = json.dumps(turn.parsed_output, indent=2, ensure_ascii=False)
+                lines.append("Parsed structured output:")
+                lines.append("```json")
+                lines.append(parsed_json)
+                lines.append("```")
+            else:
+                trimmed = turn.assistant_text.strip()
+                if len(trimmed) > 4000:
+                    trimmed = trimmed[:4000] + "\n...[truncated session history]..."
+                lines.append("Assistant output summary:")
+                lines.append("```text")
+                lines.append(trimmed)
+                lines.append("```")
+            lines.append("")
+
+        lines.extend(
+            [
+                "## Current Turn",
+                task_prompt,
+            ]
+        )
+        return "\n".join(lines)
+
+    def add_turn(
+        self,
+        step_name: str,
+        prompt_path: str,
+        raw_output_path: str,
+        parsed_output_path: Optional[str],
+        parsed_output: Optional[Dict[str, Any]],
+        assistant_text_path: str,
+        assistant_text: str,
+        native_thread_id: Optional[str] = None,
+    ) -> None:
+        if native_thread_id:
+            self.native_thread_id = native_thread_id
+        self.turns.append(
+            StageSessionTurn(
+                step_name=step_name,
+                prompt_path=prompt_path,
+                raw_output_path=raw_output_path,
+                parsed_output_path=parsed_output_path,
+                parsed_output=parsed_output,
+                assistant_text_path=assistant_text_path,
+                assistant_text=assistant_text,
+            )
+        )
+        self._write_manifest()
+
+    def _write_manifest(self) -> None:
+        manifest = {
+            "session_name": self.session_name,
+            "native_thread_id": self.native_thread_id,
+            "turn_count": len(self.turns),
+            "turns": [
+                {
+                    "step_name": turn.step_name,
+                    "prompt_path": turn.prompt_path,
+                    "raw_output_path": turn.raw_output_path,
+                    "parsed_output_path": turn.parsed_output_path,
+                    "assistant_text_path": turn.assistant_text_path,
+                }
+                for turn in self.turns
+            ],
+        }
+        _write_json(os.path.join(self.session_dir, "session_manifest.json"), manifest)
+
+
 def setup_logging(verbose: bool = False) -> None:
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(
@@ -459,15 +571,25 @@ class VulnSynthPlanAgent:
         stage_name: str,
         prompt: str,
         output_dir: str,
+        session: Optional[StageSession] = None,
     ) -> Dict[str, Any]:
         prompt_path = os.path.join(output_dir, f"{stage_name}_prompt.md")
-        _write_text(prompt_path, prompt)
+        effective_prompt = session.build_prompt(prompt) if session else prompt
+        _write_text(prompt_path, effective_prompt)
+        native_handle = None
+        if session and getattr(self.backend, "supports_native_sessions", lambda: False)():
+            if session.native_thread_id:
+                native_handle = self.backend.create_native_session_handle(
+                    session.native_thread_id,
+                    stage_name,
+                )
 
         result = await self.backend.execute_prompt(
-            prompt=prompt,
+            prompt=effective_prompt,
             env=os.environ.copy(),
             cwd=self.working_dir,
             phase_name=stage_name,
+            native_session=native_handle,
         )
 
         stdout_path = os.path.join(output_dir, f"{stage_name}_stdout.jsonl")
@@ -482,9 +604,22 @@ class VulnSynthPlanAgent:
             )
 
         text_output = self.backend.extract_text_output(result.get("stdout", ""))
-        _write_text(os.path.join(output_dir, f"{stage_name}_assistant.txt"), text_output)
+        assistant_path = os.path.join(output_dir, f"{stage_name}_assistant.txt")
+        _write_text(assistant_path, text_output)
         parsed = _extract_json_object(text_output)
-        _write_json(os.path.join(output_dir, f"{stage_name}_parsed.json"), parsed)
+        parsed_path = os.path.join(output_dir, f"{stage_name}_parsed.json")
+        _write_json(parsed_path, parsed)
+        if session:
+            session.add_turn(
+                step_name=stage_name,
+                prompt_path=prompt_path,
+                raw_output_path=stdout_path,
+                parsed_output_path=parsed_path,
+                parsed_output=parsed,
+                assistant_text_path=assistant_path,
+                assistant_text=text_output,
+                native_thread_id=result.get("thread_id"),
+            )
         return parsed
 
     async def analyze(self, cve_id: str, output_root: str = "src/IR") -> Dict[str, str]:
@@ -507,54 +642,67 @@ class VulnSynthPlanAgent:
         self.logger.info(f"Using repository root: {repo_path}")
         self.logger.info(f"Writing IR outputs to: {output_dir}")
 
-        self.backend.setup_workspace(output_dir, task)
+        try:
+            self.logger.info("Pre-cleaning MCP/LSP processes before plan stage")
+            await self.backend.cleanup()
+            self.backend.setup_workspace(output_dir, task)
+            plan_session = StageSession("plan", os.path.join(output_dir, "sessions", "plan"))
 
-        metadata = {
-            "cve_id": cve_id,
-            "repo_path": repo_path,
-            "diff_path": diff_path,
-            "output_dir": output_dir,
-            "generated_at": datetime.utcnow().isoformat() + "Z",
-            "backend": "codex",
-            "model": self.backend.model,
-            "ablation_mode": self.backend.ablation_mode,
-        }
-        _write_json(os.path.join(output_dir, "metadata.json"), metadata)
+            metadata = {
+                "cve_id": cve_id,
+                "repo_path": repo_path,
+                "diff_path": diff_path,
+                "output_dir": output_dir,
+                "generated_at": datetime.utcnow().isoformat() + "Z",
+                "backend": "codex",
+                "model": self.backend.model,
+                "ablation_mode": self.backend.ablation_mode,
+                "session_architecture": {
+                    "plan": "native Codex session when available, with virtual replay fallback",
+                },
+            }
+            _write_json(os.path.join(output_dir, "metadata.json"), metadata)
 
-        self.logger.info("Stage 1/3: generating L1 facts")
-        l1 = await self._run_stage(
-            "stage1_l1",
-            vulnsynth_prompts.build_l1_prompt(task),
-            output_dir,
-        )
-        _write_json(os.path.join(output_dir, "cve_facts.json"), l1)
+            self.logger.info("Stage 1/3: generating L1 facts")
+            l1 = await self._run_stage(
+                "stage1_l1",
+                vulnsynth_prompts.build_l1_prompt(task),
+                output_dir,
+                session=plan_session,
+            )
+            _write_json(os.path.join(output_dir, "cve_facts.json"), l1)
 
-        self.logger.info("Stage 2/3: generating L2 schema IR")
-        l2 = await self._run_stage(
-            "stage2_l2",
-            vulnsynth_prompts.build_l2_prompt(task, json.dumps(l1, indent=2, ensure_ascii=False)),
-            output_dir,
-        )
-        _write_json(os.path.join(output_dir, "codeql_schema_ir.json"), l2)
+            self.logger.info("Stage 2/3: generating L2 schema IR")
+            l2 = await self._run_stage(
+                "stage2_l2",
+                vulnsynth_prompts.build_l2_prompt(task, json.dumps(l1, indent=2, ensure_ascii=False)),
+                output_dir,
+                session=plan_session,
+            )
+            _write_json(os.path.join(output_dir, "codeql_schema_ir.json"), l2)
 
-        self.logger.info("Stage 3/3: generating L3 query construction steps")
-        l3 = await self._run_stage(
-            "stage3_l3",
-            vulnsynth_prompts.build_l3_prompt(
-                task,
-                json.dumps(l1, indent=2, ensure_ascii=False),
-                json.dumps(l2, indent=2, ensure_ascii=False),
-            ),
-            output_dir,
-        )
-        _write_json(os.path.join(output_dir, "codeql_logic_steps.json"), l3)
+            self.logger.info("Stage 3/3: generating L3 query construction steps")
+            l3 = await self._run_stage(
+                "stage3_l3",
+                vulnsynth_prompts.build_l3_prompt(
+                    task,
+                    json.dumps(l1, indent=2, ensure_ascii=False),
+                    json.dumps(l2, indent=2, ensure_ascii=False),
+                ),
+                output_dir,
+                session=plan_session,
+            )
+            _write_json(os.path.join(output_dir, "codeql_logic_steps.json"), l3)
 
-        return {
-            "output_dir": output_dir,
-            "l1_path": os.path.join(output_dir, "cve_facts.json"),
-            "l2_path": os.path.join(output_dir, "codeql_schema_ir.json"),
-            "l3_path": os.path.join(output_dir, "codeql_logic_steps.json"),
-        }
+            return {
+                "output_dir": output_dir,
+                "l1_path": os.path.join(output_dir, "cve_facts.json"),
+                "l2_path": os.path.join(output_dir, "codeql_schema_ir.json"),
+                "l3_path": os.path.join(output_dir, "codeql_logic_steps.json"),
+            }
+        finally:
+            self.logger.info("Cleaning up MCP/LSP processes after plan stage")
+            await self.backend.cleanup()
 
 
 class VulnSynthGenAgent:
@@ -575,15 +723,30 @@ class VulnSynthGenAgent:
             use_local_config=codex_use_local_config,
         )
 
-    async def _run_stage(self, stage_name: str, prompt: str, output_dir: str) -> Dict[str, Any]:
+    async def _run_stage(
+        self,
+        stage_name: str,
+        prompt: str,
+        output_dir: str,
+        session: Optional[StageSession] = None,
+    ) -> Dict[str, Any]:
         prompt_path = os.path.join(output_dir, f"{stage_name}_prompt.md")
-        _write_text(prompt_path, prompt)
+        effective_prompt = session.build_prompt(prompt) if session else prompt
+        _write_text(prompt_path, effective_prompt)
+        native_handle = None
+        if session and getattr(self.backend, "supports_native_sessions", lambda: False)():
+            if session.native_thread_id:
+                native_handle = self.backend.create_native_session_handle(
+                    session.native_thread_id,
+                    stage_name,
+                )
 
         result = await self.backend.execute_prompt(
-            prompt=prompt,
+            prompt=effective_prompt,
             env=os.environ.copy(),
             cwd=self.working_dir,
             phase_name=stage_name,
+            native_session=native_handle,
         )
 
         stdout_path = os.path.join(output_dir, f"{stage_name}_stdout.jsonl")
@@ -598,9 +761,22 @@ class VulnSynthGenAgent:
             )
 
         text_output = self.backend.extract_text_output(result.get("stdout", ""))
-        _write_text(os.path.join(output_dir, f"{stage_name}_assistant.txt"), text_output)
+        assistant_path = os.path.join(output_dir, f"{stage_name}_assistant.txt")
+        _write_text(assistant_path, text_output)
         parsed = _extract_json_object(text_output)
-        _write_json(os.path.join(output_dir, f"{stage_name}_parsed.json"), parsed)
+        parsed_path = os.path.join(output_dir, f"{stage_name}_parsed.json")
+        _write_json(parsed_path, parsed)
+        if session:
+            session.add_turn(
+                step_name=stage_name,
+                prompt_path=prompt_path,
+                raw_output_path=stdout_path,
+                parsed_output_path=parsed_path,
+                parsed_output=parsed,
+                assistant_text_path=assistant_path,
+                assistant_text=text_output,
+                native_thread_id=result.get("thread_id"),
+            )
         return parsed
 
     async def generate(
@@ -639,85 +815,109 @@ class VulnSynthGenAgent:
         output_dir = os.path.join(ir_case_dir, generation_subdir)
         fragments_dir = os.path.join(output_dir, "fragments")
         os.makedirs(fragments_dir, exist_ok=True)
-        self.backend.setup_workspace(output_dir, task)
+        try:
+            self.logger.info("Pre-cleaning MCP/LSP processes before gen stage")
+            await self.backend.cleanup()
+            self.backend.setup_workspace(output_dir, task)
+            fragments_session = StageSession(
+                "gen-fragments",
+                os.path.join(output_dir, "sessions", "gen_fragments"),
+            )
+            compose_session = StageSession(
+                "gen-compose",
+                os.path.join(output_dir, "sessions", "gen_compose"),
+            )
 
-        metadata = {
-            "cve_id": cve_id,
-            "language": language,
-            "repo_path": repo_path,
-            "ir_root": ir_case_dir,
-            "generated_at": datetime.utcnow().isoformat() + "Z",
-            "backend": "codex",
-            "model": self.backend.model,
-            "ablation_mode": self.backend.ablation_mode,
-        }
-        _write_json(os.path.join(output_dir, "metadata.json"), metadata)
+            metadata = {
+                "cve_id": cve_id,
+                "language": language,
+                "repo_path": repo_path,
+                "ir_root": ir_case_dir,
+                "generated_at": datetime.utcnow().isoformat() + "Z",
+                "backend": "codex",
+                "model": self.backend.model,
+                "ablation_mode": self.backend.ablation_mode,
+                "session_architecture": {
+                    "gen_fragments": "shared native Codex session when available, with virtual replay fallback",
+                    "gen_compose": "isolated native Codex session when available, with virtual replay fallback",
+                },
+            }
+            _write_json(os.path.join(output_dir, "metadata.json"), metadata)
 
-        l1_json = json.dumps(l1, indent=2, ensure_ascii=False)
-        l2_json = json.dumps(l2, indent=2, ensure_ascii=False)
-        l3_json = json.dumps(l3, indent=2, ensure_ascii=False)
+            l1_json = json.dumps(l1, indent=2, ensure_ascii=False)
+            l2_json = json.dumps(l2, indent=2, ensure_ascii=False)
+            l3_json = json.dumps(l3, indent=2, ensure_ascii=False)
 
-        fragment_bundle = {
-            "case_id": cve_id,
-            "language": language,
-            "fragments": [],
-        }
+            fragment_bundle = {
+                "case_id": cve_id,
+                "language": language,
+                "fragments": [],
+            }
 
-        for index, step in enumerate(steps, start=1):
-            step_id = step.get("step_id", f"step_{index}")
-            slug = _slugify(step_id)
-            retrieval_plan = build_step_retrieval_plan(step, language, task.nvd_cache)
-            step_output_dir = os.path.join(fragments_dir, f"{index:02d}_{slug}")
-            os.makedirs(step_output_dir, exist_ok=True)
-            _write_json(os.path.join(step_output_dir, "retrieval_plan.json"), retrieval_plan)
-            _write_json(os.path.join(step_output_dir, "step.json"), step)
+            for index, step in enumerate(steps, start=1):
+                step_id = step.get("step_id", f"step_{index}")
+                slug = _slugify(step_id)
+                retrieval_plan = build_step_retrieval_plan(step, language, task.nvd_cache)
+                step_output_dir = os.path.join(fragments_dir, f"{index:02d}_{slug}")
+                os.makedirs(step_output_dir, exist_ok=True)
+                _write_json(os.path.join(step_output_dir, "retrieval_plan.json"), retrieval_plan)
+                _write_json(os.path.join(step_output_dir, "step.json"), step)
 
-            prompt = vulnsynth_prompts.build_fragment_prompt(
+                prompt = vulnsynth_prompts.build_fragment_prompt(
+                    task,
+                    l1_json,
+                    l2_json,
+                    l3_json,
+                    json.dumps(step, indent=2, ensure_ascii=False),
+                    json.dumps(retrieval_plan, indent=2, ensure_ascii=False),
+                    language,
+                )
+                fragment = await self._run_stage(
+                    f"gen_step_{index:02d}_{slug}",
+                    prompt,
+                    step_output_dir,
+                    session=fragments_session,
+                )
+                _write_json(os.path.join(step_output_dir, "fragment.json"), fragment)
+                fragment_code = str(fragment.get("codeql_fragment", "")).rstrip() + "\n"
+                _write_text(os.path.join(step_output_dir, "fragment.qlfrag"), fragment_code)
+                fragment_bundle["fragments"].append(fragment)
+
+            fragment_bundle_path = os.path.join(output_dir, "fragment_bundle.json")
+            _write_json(fragment_bundle_path, fragment_bundle)
+
+            compose_prompt = vulnsynth_prompts.build_query_composition_prompt(
                 task,
                 l1_json,
                 l2_json,
                 l3_json,
-                json.dumps(step, indent=2, ensure_ascii=False),
-                json.dumps(retrieval_plan, indent=2, ensure_ascii=False),
+                json.dumps(fragment_bundle, indent=2, ensure_ascii=False),
                 language,
             )
-            fragment = await self._run_stage(
-                f"gen_step_{index:02d}_{slug}",
-                prompt,
-                step_output_dir,
+            final_query = await self._run_stage(
+                "compose_final_query",
+                compose_prompt,
+                output_dir,
+                session=compose_session,
             )
-            _write_json(os.path.join(step_output_dir, "fragment.json"), fragment)
-            fragment_code = str(fragment.get("codeql_fragment", "")).rstrip() + "\n"
-            _write_text(os.path.join(step_output_dir, "fragment.qlfrag"), fragment_code)
-            fragment_bundle["fragments"].append(fragment)
+            _write_json(os.path.join(output_dir, "final_query.json"), final_query)
 
-        fragment_bundle_path = os.path.join(output_dir, "fragment_bundle.json")
-        _write_json(fragment_bundle_path, fragment_bundle)
+            query_file_name = final_query.get("query_file_name") or f"{cve_id.lower()}_generated.ql"
+            if not str(query_file_name).endswith(".ql"):
+                query_file_name = f"{query_file_name}.ql"
+            query_path = os.path.join(output_dir, query_file_name)
+            _write_text(query_path, str(final_query.get("query_code", "")).rstrip() + "\n")
 
-        compose_prompt = vulnsynth_prompts.build_query_composition_prompt(
-            task,
-            l1_json,
-            l2_json,
-            l3_json,
-            json.dumps(fragment_bundle, indent=2, ensure_ascii=False),
-            language,
-        )
-        final_query = await self._run_stage("compose_final_query", compose_prompt, output_dir)
-        _write_json(os.path.join(output_dir, "final_query.json"), final_query)
-
-        query_file_name = final_query.get("query_file_name") or f"{cve_id.lower()}_generated.ql"
-        if not str(query_file_name).endswith(".ql"):
-            query_file_name = f"{query_file_name}.ql"
-        query_path = os.path.join(output_dir, query_file_name)
-        _write_text(query_path, str(final_query.get("query_code", "")).rstrip() + "\n")
-
-        return {
-            "output_dir": output_dir,
-            "fragments_dir": fragments_dir,
-            "fragment_bundle_path": fragment_bundle_path,
-            "final_query_json_path": os.path.join(output_dir, "final_query.json"),
-            "final_query_path": query_path,
-        }
+            return {
+                "output_dir": output_dir,
+                "fragments_dir": fragments_dir,
+                "fragment_bundle_path": fragment_bundle_path,
+                "final_query_json_path": os.path.join(output_dir, "final_query.json"),
+                "final_query_path": query_path,
+            }
+        finally:
+            self.logger.info("Cleaning up MCP/LSP processes after gen stage")
+            await self.backend.cleanup()
 
 
 async def main() -> None:

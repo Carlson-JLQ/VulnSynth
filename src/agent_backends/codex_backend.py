@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import dataclass
 import json
 import os
 import re
@@ -140,6 +141,11 @@ class CodexBackend(AgentBackend):
             if configured_model:
                 self.model = configured_model
 
+    @dataclass
+    class NativeSessionHandle:
+        thread_id: str
+        phase_name: str
+
     def get_tool_prefix(self) -> str:
         return ""
 
@@ -235,6 +241,7 @@ class CodexBackend(AgentBackend):
         env: dict,
         cwd: str,
         phase_name: str,
+        native_session: Optional["CodexBackend.NativeSessionHandle"] = None,
     ) -> Dict:
         """Execute a single Codex context window via JSONL streaming."""
         api_key = env.get("OPENAI_API_KEY", "")
@@ -254,7 +261,7 @@ class CodexBackend(AgentBackend):
         # Use "--dangerously-bypass.."" with caution.
         # You can also use --full-auto or configure
         # an appropriate sandbox policy for your environment.
-        cmd = self._build_exec_command()
+        cmd = self._build_exec_command(native_session=native_session)
 
         stdout_chunks: List[bytes] = []
         stderr_chunks: List[bytes] = []
@@ -357,6 +364,9 @@ class CodexBackend(AgentBackend):
 
             stdout_str = b"".join(stdout_chunks).decode("utf-8", errors="replace")
             stderr_str = b"".join(stderr_chunks).decode("utf-8", errors="replace")
+            resolved_thread_id = self._extract_thread_id(stdout_str) or (
+                native_session.thread_id if native_session else None
+            )
 
             api_usage = {
                 "total_cost_usd": 0.0,
@@ -384,6 +394,7 @@ class CodexBackend(AgentBackend):
                 "stderr": stderr_str,
                 "returncode": proc.returncode,
                 "api_usage": api_usage,
+                "thread_id": resolved_thread_id,
             }
 
         except Exception as e:
@@ -393,7 +404,18 @@ class CodexBackend(AgentBackend):
                 "stderr": str(e),
                 "returncode": 1,
                 "api_usage": self.parse_usage(""),
+                "thread_id": native_session.thread_id if native_session else None,
             }
+
+    def create_native_session_handle(
+        self,
+        thread_id: str,
+        phase_name: str,
+    ) -> "CodexBackend.NativeSessionHandle":
+        return CodexBackend.NativeSessionHandle(thread_id=thread_id, phase_name=phase_name)
+
+    def supports_native_sessions(self) -> bool:
+        return True
 
     # Prompt generation  
 
@@ -416,13 +438,40 @@ class CodexBackend(AgentBackend):
 
     # Workspace helpers
 
-    def _build_exec_command(self) -> List[str]:
+    @staticmethod
+    def _extract_thread_id(stdout: str) -> Optional[str]:
+        for line in stdout.splitlines():
+            obj = _parse_json_maybe(line)
+            if not obj or "_raw" in obj:
+                continue
+            if obj.get("type") == "thread.started":
+                thread_id = obj.get("thread_id")
+                if thread_id:
+                    return str(thread_id)
+            msg = obj.get("msg", {})
+            if msg.get("type") == "thread.started":
+                thread_id = msg.get("thread_id")
+                if thread_id:
+                    return str(thread_id)
+        return None
+
+    def _build_exec_command(
+        self,
+        native_session: Optional["CodexBackend.NativeSessionHandle"] = None,
+    ) -> List[str]:
         model_id = MODELS.get(self.model, self.model)
-        cmd = [
-            self.cli_path, "exec",
-            "--dangerously-bypass-approvals-and-sandbox",
-            "--json",
-        ]
+        if native_session is None:
+            cmd = [
+                self.cli_path, "exec",
+                "--dangerously-bypass-approvals-and-sandbox",
+                "--json",
+            ]
+        else:
+            cmd = [
+                self.cli_path, "exec", "resume", native_session.thread_id,
+                "--dangerously-bypass-approvals-and-sandbox",
+                "--json",
+            ]
         if not self.use_local_config:
             cmd.extend(["-m", model_id])
         return cmd
