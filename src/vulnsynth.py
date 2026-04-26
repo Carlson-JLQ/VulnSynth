@@ -10,8 +10,11 @@ import logging
 import os
 import re
 import shutil
+import signal
+import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
@@ -37,6 +40,65 @@ except Exception:
 
 
 LOGGER = logging.getLogger("vulnsynth")
+
+
+def _cleanup_orphan_mcp_processes() -> Dict[str, int]:
+    """Best-effort cleanup for orphaned MCP/LSP processes.
+
+    We only target processes whose parent pid is 1 (orphaned), to avoid killing
+    actively used servers started by the current interactive session.
+    """
+
+    killed = {"codeql_mcp": 0, "codeql_lsp": 0, "chroma_mcp": 0}
+    try:
+        out = subprocess.check_output(["ps", "-eo", "pid=,ppid=,cmd="], text=True)
+    except Exception:
+        return killed
+
+    targets: List[Tuple[int, str]] = []
+    for line in out.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split(None, 2)
+        if len(parts) < 3:
+            continue
+        try:
+            pid = int(parts[0])
+            ppid = int(parts[1])
+        except Exception:
+            continue
+        cmd = parts[2]
+        if ppid != 1:
+            continue
+
+        if "codeql-lsp-mcp/dist/index.js" in cmd or "codeql-mcp/dist/index.js" in cmd:
+            targets.append((pid, "codeql_mcp"))
+        elif "codeql execute language-server" in cmd:
+            targets.append((pid, "codeql_lsp"))
+        elif "chroma-mcp" in cmd:
+            targets.append((pid, "chroma_mcp"))
+
+    for pid, kind in targets:
+        try:
+            os.kill(pid, signal.SIGTERM)
+            killed[kind] += 1
+        except Exception:
+            pass
+
+    # Give processes a moment to exit, then force-kill if still alive.
+    time.sleep(0.5)
+    for pid, kind in targets:
+        try:
+            os.kill(pid, 0)
+        except Exception:
+            continue
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except Exception:
+            pass
+
+    return killed
 
 GLOBAL_COLLECTIONS = {
     "codeql_ql_reference": {
@@ -635,9 +697,16 @@ class VulnSynthPlanAgent:
         prompt_path = os.path.join(output_dir, f"{stage_name}_prompt.md")
         _write_text(prompt_path, prompt)
 
+        env = os.environ.copy()
+        # Multi-session support for Coco: allow a stable base session id and derive
+        # a role-specific session for plan stages.
+        base_session = str(env.get("COCO_SESSION_ID_BASE", "") or env.get("COCO_SESSION_ID", "")).strip()
+        if base_session:
+            env["COCO_SESSION_ID"] = f"{base_session}::plan"
+
         result = await self.backend.execute_prompt(
             prompt=prompt,
-            env=os.environ.copy(),
+            env=env,
             cwd=self.working_dir,
             phase_name=stage_name,
         )
@@ -675,6 +744,9 @@ class VulnSynthPlanAgent:
 
         output_dir = os.path.join(self.working_dir, output_root, cve_id)
         os.makedirs(output_dir, exist_ok=True)
+
+        # Default base session id for standalone plan runs.
+        os.environ.setdefault("COCO_SESSION_ID_BASE", f"vulnsynth-{cve_id}")
 
         self.logger.info(f"Using repository root: {repo_path}")
         self.logger.info(f"Writing IR outputs to: {output_dir}")
@@ -757,6 +829,9 @@ class VulnSynthPlanAgent:
 
         output_dir = os.path.join(self.working_dir, output_root, cve_id)
         os.makedirs(output_dir, exist_ok=True)
+
+        # Default base session id for standalone plan runs.
+        os.environ.setdefault("COCO_SESSION_ID_BASE", f"vulnsynth-{cve_id}")
         self.backend.setup_workspace(output_dir, task)
 
         l1_path = os.path.join(output_dir, "cve_facts.json")
@@ -823,9 +898,17 @@ class VulnSynthGenAgent:
         prompt_path = os.path.join(output_dir, f"{stage_name}_prompt.md")
         _write_text(prompt_path, prompt)
 
+        env = os.environ.copy()
+        # Multi-session support for Coco: derive dedicated sessions for fragment
+        # generation vs final composition.
+        base_session = str(env.get("COCO_SESSION_ID_BASE", "") or env.get("COCO_SESSION_ID", "")).strip()
+        if base_session:
+            role = "compose" if stage_name == "compose_final_query" else "gen"
+            env["COCO_SESSION_ID"] = f"{base_session}::{role}"
+
         result = await self.backend.execute_prompt(
             prompt=prompt,
-            env=os.environ.copy(),
+            env=env,
             cwd=self.working_dir,
             phase_name=stage_name,
         )
@@ -843,9 +926,134 @@ class VulnSynthGenAgent:
 
         text_output = self.backend.extract_text_output(result.get("stdout", ""))
         _write_text(os.path.join(output_dir, f"{stage_name}_assistant.txt"), text_output)
-        parsed = _extract_json_object(text_output)
-        _write_json(os.path.join(output_dir, f"{stage_name}_parsed.json"), parsed)
-        return parsed
+
+        def _extract_code_block(text: str) -> str:
+            # Prefer fenced CodeQL blocks, but tolerate generic fences.
+            m = re.search(r"```(?:ql|codeql)?\s*(.*?)\s*```", text, flags=re.DOTALL | re.IGNORECASE)
+            if m:
+                return (m.group(1) or "").strip()
+            return text.strip()
+
+        def _infer_required_imports(code: str) -> list:
+            imports: list[str] = []
+            for line in (code or "").splitlines():
+                s = line.strip()
+                if s.startswith("import "):
+                    # Keep the whole import line (minus trailing semicolon).
+                    imports.append(s.rstrip(";").strip())
+            # de-dup preserving order
+            seen = set()
+            out: list[str] = []
+            for it in imports:
+                if it in seen:
+                    continue
+                seen.add(it)
+                out.append(it)
+            return out
+
+        def _salvage_non_json_output() -> Optional[Dict[str, Any]]:
+            """Best-effort salvage when model returns CodeQL instead of JSON.
+
+            This commonly happens for fragment steps where the model outputs a fenced
+            CodeQL snippet. We wrap it into the required JSON contract using step.json.
+            """
+            # Compose stage: model may output a raw query; wrap it into final_query.json.
+            if stage_name == "compose_final_query":
+                code = _extract_code_block(text_output)
+                if not code:
+                    return None
+                cve_id = "generated"
+                meta_path = os.path.join(output_dir, "metadata.json")
+                try:
+                    meta = _read_json(meta_path) if os.path.exists(meta_path) else {}
+                    if isinstance(meta, dict) and meta.get("cve_id"):
+                        cve_id = str(meta.get("cve_id"))
+                except Exception:
+                    pass
+                return {
+                    "query_file_name": f"{cve_id}.ql",
+                    "query_code": code.rstrip() + "\n",
+                    "notes": [
+                        "Auto-salvaged: model returned CodeQL query instead of the required JSON object.",
+                    ],
+                }
+
+            step_path = os.path.join(output_dir, "step.json")
+            if not os.path.exists(step_path):
+                return None
+            try:
+                step_obj = _read_json(step_path)
+            except Exception:
+                return None
+            if not isinstance(step_obj, dict):
+                return None
+
+            code = _extract_code_block(text_output)
+            if not code:
+                return None
+
+            step_id = step_obj.get("step_id") or stage_name
+            fragment_type = step_obj.get("fragment_type") or "predicate"
+            requires = step_obj.get("requires_symbols")
+            produces = step_obj.get("produces_symbols")
+            return {
+                "step_id": step_id,
+                "fragment_type": fragment_type,
+                "summary": f"Auto-salvaged non-JSON output for {step_id}",
+                "required_imports": _infer_required_imports(code),
+                "defines_symbols": produces if isinstance(produces, list) else [],
+                "depends_on_symbols": requires if isinstance(requires, list) else [],
+                "codeql_fragment": code.rstrip() + "\n",
+                "notes": [
+                    "Auto-salvaged: model returned CodeQL snippet instead of the required JSON object.",
+                ],
+            }
+
+        # Normal path: parse JSON output.
+        try:
+            parsed = _extract_json_object(text_output)
+            _write_json(os.path.join(output_dir, f"{stage_name}_parsed.json"), parsed)
+            return parsed
+        except Exception as e:
+            # Persist the parse failure for debugging.
+            _write_text(
+                os.path.join(output_dir, f"{stage_name}_parse_error.log"),
+                f"{type(e).__name__}: {e}\n\n{text_output}\n",
+            )
+
+            salvaged = _salvage_non_json_output()
+            if salvaged is not None:
+                _write_json(os.path.join(output_dir, f"{stage_name}_parsed.json"), salvaged)
+                return salvaged
+
+            # Fallback: ask the model once more to emit *only* a JSON object.
+            repair_prompt = (
+                "Your previous answer did not follow the required Output Contract.\n"
+                "Return EXACTLY ONE JSON object and NOTHING ELSE. No markdown fences.\n"
+                "The JSON object MUST conform to the contract described in the prompt you were given.\n"
+            )
+            repair = await self.backend.execute_prompt(
+                prompt=repair_prompt,
+                env=env,
+                cwd=self.working_dir,
+                phase_name=f"{stage_name}_repair",
+            )
+            repair_stdout_path = os.path.join(output_dir, f"{stage_name}_repair_stdout.jsonl")
+            repair_stderr_path = os.path.join(output_dir, f"{stage_name}_repair_stderr.log")
+            _write_text(repair_stdout_path, repair.get("stdout", ""))
+            _write_text(repair_stderr_path, repair.get("stderr", ""))
+
+            if repair.get("returncode", 1) != 0:
+                raise RuntimeError(
+                    f"{stage_name} repair failed with return code {repair.get('returncode')}: "
+                    f"{repair.get('stderr', '').strip()}"
+                )
+
+            repair_text = self.backend.extract_text_output(repair.get("stdout", ""))
+            _write_text(os.path.join(output_dir, f"{stage_name}_repair_assistant.txt"), repair_text)
+            parsed = _extract_json_object(repair_text)
+            _write_json(os.path.join(output_dir, f"{stage_name}_parsed.json"), parsed)
+            return parsed
 
     async def generate(
         self,
@@ -884,6 +1092,9 @@ class VulnSynthGenAgent:
         )
 
         language = _infer_language_from_ir(l1, repo_path)
+
+        # Default base session id for standalone gen runs.
+        os.environ.setdefault("COCO_SESSION_ID_BASE", f"vulnsynth-{cve_id}")
         output_dir = os.path.join(ir_case_dir, generation_subdir)
         fragments_dir = os.path.join(output_dir, "fragments")
         os.makedirs(fragments_dir, exist_ok=True)
@@ -1064,7 +1275,7 @@ class VulnSynthValidAgent:
         # Discover vuln/fix DBs.
         vuln_db, fixed_db = _discover_codeql_db_paths(cve_id)
 
-        cve_dir, repo_path, _ = discover_cve_paths(cve_id)
+        cve_dir, repo_path, diff_path = discover_cve_paths(cve_id)
         language = _infer_language_from_ir(l1, repo_path)
 
         timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
@@ -1096,6 +1307,58 @@ class VulnSynthValidAgent:
             artifact_prefix=f"{artifact_prefix}",
         )
 
+        evaluation: Dict[str, Any] = {
+            "success": False,
+            "vulnerable": None,
+            "fixed": None,
+            "recall_method": None,
+            "recall_file": None,
+            "error": None,
+        }
+
+        # Effect evaluation: compare SARIF results against FIX_INFO targets.
+        try:
+            # `src/evaluation.py` reads CODEQL_PATH from env at import time.
+            if codeql_path and not os.environ.get("CODEQL_PATH"):
+                os.environ["CODEQL_PATH"] = codeql_path
+            try:
+                from src.evaluation import QueryEvaluator
+            except ImportError:
+                from evaluation import QueryEvaluator
+
+            vuln_sarif = str(vuln_result.get("sarif_path") or "")
+            fixed_sarif = str(fixed_result.get("sarif_path") or "")
+            if vuln_sarif and os.path.exists(vuln_sarif):
+                vuln_eval_path = os.path.join(out_dir, f"{artifact_prefix}_vulnerable_eval.json")
+                evaluator = QueryEvaluator(
+                    input_dir=out_dir,
+                    cve_id=cve_id,
+                    diff_file=diff_path,
+                    final_output_json_path=vuln_eval_path,
+                    database_path=vuln_db,
+                    logger=self.logger,
+                )
+                evaluation["vulnerable"] = evaluator.evaluate_sarif_result(vuln_sarif, query_path, vuln_db)
+
+            if fixed_sarif and os.path.exists(fixed_sarif):
+                fixed_eval_path = os.path.join(out_dir, f"{artifact_prefix}_fixed_eval.json")
+                evaluator = QueryEvaluator(
+                    input_dir=out_dir,
+                    cve_id=cve_id,
+                    diff_file=diff_path,
+                    final_output_json_path=fixed_eval_path,
+                    database_path=fixed_db,
+                    logger=self.logger,
+                )
+                evaluation["fixed"] = evaluator.evaluate_sarif_result(fixed_sarif, query_path, fixed_db)
+
+            v = evaluation.get("vulnerable") or {}
+            evaluation["recall_method"] = bool(v.get("recall_method"))
+            evaluation["recall_file"] = bool(v.get("recall_file"))
+            evaluation["success"] = True
+        except Exception as e:
+            evaluation["error"] = str(e)
+
         summary = {
             "cve_id": cve_id,
             "ir_case_dir": ir_case_dir,
@@ -1120,6 +1383,7 @@ class VulnSynthValidAgent:
                     "fixed_results": fixed_result.get("num_results", 0),
                 },
             },
+            "evaluation": evaluation,
         }
 
         summary_path = os.path.join(out_dir, f"{artifact_prefix}_summary.json")
@@ -1278,6 +1542,11 @@ class FailureAnalyzer:
 
         # 5.3 Effect-class failures (only when compile succeeded)
         if compile_ok:
+            evaluation = validation_summary.get("evaluation", {}) or {}
+            # Prefer evaluator-based target hit signals when available.
+            eval_recall_method = evaluation.get("recall_method")
+            eval_recall_file = evaluation.get("recall_file")
+
             if vuln_results == 0:
                 _add(
                     "empty_result_on_vulnerable",
@@ -1285,6 +1554,15 @@ class FailureAnalyzer:
                     0.8,
                     ["compile success", "vulnerable results == 0"],
                     ["l3", "fragment", "composer"],
+                )
+            elif (eval_recall_method is False) and (eval_recall_file is False):
+                # Has results but misses known fixed locations -> likely target miss.
+                _add(
+                    "target_miss_on_vulnerable",
+                    "high",
+                    0.75,
+                    ["compile success", "vulnerable results > 0", "evaluation recall_file=false and recall_method=false"],
+                    ["l2", "l3", "fragment", "composer"],
                 )
             elif fixed_results > 0:
                 _add(
@@ -1337,9 +1615,8 @@ class FailureAnalyzer:
                 "fixed_results": fixed_results,
             },
             "evaluation": {
-                # MVP: no evaluator integration here
-                "recall_method": None,
-                "recall_file": None,
+                "recall_method": (validation_summary.get("evaluation", {}) or {}).get("recall_method"),
+                "recall_file": (validation_summary.get("evaluation", {}) or {}).get("recall_file"),
                 "false_positive_on_fixed": fixed_results > 0,
             },
             "primary_failure_type": primary,
@@ -1466,6 +1743,48 @@ class UpdateEngine:
                     "recompose_query",
                     "Recompose query after L3 guidance update",
                 )
+            elif ft == "target_miss_on_vulnerable":
+                # Has results but misses target fixed locations -> broaden anchor binding and retrieval hints.
+                _act(
+                    f"act_{idx:03d}",
+                    "L3",
+                    "*",
+                    "augment_retrieval_hints",
+                    "target_miss_on_vulnerable: broaden retrieval for anchor steps and target binding",
+                    patch={
+                        "candidate_classes_add": ["Method", "Callable", "Field", "StringLiteral"],
+                        "candidate_predicates_add": ["getName", "hasQualifiedName", "getDeclaringType"],
+                    },
+                )
+                _act(
+                    f"act_{idx:03d}_b",
+                    "L3",
+                    "*",
+                    "revise_step_description",
+                    "target_miss_on_vulnerable: add explicit target-binding guidance",
+                )
+                if failure_repeat_count >= 2:
+                    _act(
+                        f"act_{idx:03d}_c",
+                        "L2",
+                        "*",
+                        "add_entity",
+                        "Repeated target miss: revisit semantic entities/relations for target anchor",
+                    )
+                _act(
+                    f"act_{idx:03d}_d",
+                    "Fragment",
+                    "*",
+                    "regenerate_fragment",
+                    "Regenerate fragments after target-binding hint update",
+                )
+                _act(
+                    f"act_{idx:03d}_e",
+                    "Composer",
+                    "compose_final_query",
+                    "recompose_query",
+                    "Recompose query after target-binding update",
+                )
             elif ft == "false_positive_on_fixed":
                 _act(
                     f"act_{idx:03d}",
@@ -1566,27 +1885,9 @@ class RegenPlanner:
         """Map failure type + repeat counts to selective regeneration scope (doc section 18)."""
         ft = str(primary_failure_type or "")
 
-        if ft in ("unknown_failure", "failure_oscillation"):
-            mode = "fallback_replan_from_l1" if failure_repeat_count < 2 else "fallback_full_replan_from_inputs"
-            return {
-                "case_id": case_id,
-                "iteration": iteration,
-                "primary_failure_type": ft,
-                "failure_repeat_count": failure_repeat_count,
-                "rerun_scope": {"mode": mode},
-                "reason": f"{ft}: fallback regen mode",
-                "drop_artifacts": [
-                    "current_l2",
-                    "current_l3",
-                    "current_fragments",
-                    "current_query",
-                ]
-                + (["current_l1"] if mode == "fallback_full_replan_from_inputs" else []),
-                "preserve_artifacts": ["validation_history", "state_trace"],
-            }
-
         # Default: rerun composer only.
-        scope = {
+        scope: Dict[str, Any] = {
+            "mode": "rerun_composer_only",
             "rerun_l1": False,
             "rerun_l2": False,
             "rerun_l3": False,
@@ -1596,21 +1897,26 @@ class RegenPlanner:
         }
 
         if ft in ("syntax_error", "fragment_composition_conflict", "missing_import", "weak_reporting_anchor"):
-            scope["rerun_composer"] = True
+            scope["mode"] = "rerun_composer_only"
         elif ft in ("unresolved_codeql_symbol", "wrong_predicate_arity", "wrong_type_constraint", "retrieval_miss", "retrieval_over_bias"):
+            scope["mode"] = "rerun_fragments"
             scope["rerun_all_fragments"] = True
             scope["rerun_composer"] = True
             if failure_repeat_count >= 2 and ft in ("unresolved_codeql_symbol", "wrong_type_constraint"):
+                scope["mode"] = "rerun_l2_l3"
                 scope["rerun_l2"] = True
                 scope["rerun_l3"] = True
         elif ft in ("query_runtime_failure",):
+            scope["mode"] = "rerun_fragments"
             scope["rerun_all_fragments"] = True
             scope["rerun_composer"] = True
             if failure_repeat_count >= 2:
+                scope["mode"] = "rerun_l3"
                 scope["rerun_l3"] = True
         elif ft in ("database_analyze_failure",):
             # Environment issue: retry validate only.
             scope = {
+                "mode": "retry_validate",
                 "rerun_l1": False,
                 "rerun_l2": False,
                 "rerun_l3": False,
@@ -1622,20 +1928,40 @@ class RegenPlanner:
         elif ft in ("empty_result_on_vulnerable",):
             # First try broadening hints/fragments; after repeat, rebuild L3.
             if failure_repeat_count >= 2:
+                scope["mode"] = "rerun_l3"
                 scope["rerun_l3"] = True
                 scope["rerun_all_fragments"] = True
             else:
+                scope["mode"] = "rerun_fragments"
                 scope["rerun_all_fragments"] = True
             scope["rerun_composer"] = True
-        elif ft in ("false_positive_on_fixed",):
+        elif ft in ("target_miss_on_vulnerable",):
+            # Has results but misses target: rebuild L3/anchors first; escalate to L2+L3.
+            scope["mode"] = "rerun_l3"
+            scope["rerun_l3"] = True
             scope["rerun_all_fragments"] = True
             scope["rerun_composer"] = True
             if failure_repeat_count >= 2:
+                scope["mode"] = "rerun_l2_l3"
+                scope["rerun_l2"] = True
+                scope["rerun_l3"] = True
+        elif ft in ("false_positive_on_fixed",):
+            scope["mode"] = "rerun_fragments"
+            scope["rerun_all_fragments"] = True
+            scope["rerun_composer"] = True
+            if failure_repeat_count >= 2:
+                scope["mode"] = "rerun_l2_l3"
                 scope["rerun_l2"] = True
                 scope["rerun_l3"] = True
                 scope["rerun_all_fragments"] = True
+        elif ft in ("unknown_failure",):
+            # Minimal fallback trigger is implemented in controller (doc section 19.2).
+            scope["mode"] = "rerun_fragments"
+            scope["rerun_all_fragments"] = True
+            scope["rerun_composer"] = True
         else:
             # Unknown: be conservative
+            scope["mode"] = "rerun_fragments"
             scope["rerun_all_fragments"] = True
             scope["rerun_composer"] = True
 
@@ -1691,9 +2017,38 @@ class FeedbackLoopController:
 
     async def run(self, cve_id: str) -> dict:
         ir_case_dir = os.path.join(self.working_dir, self.ir_root, cve_id)
-        _ensure_dir(self._feedback_dir(cve_id))
 
-        trace_path = os.path.join(self._feedback_dir(cve_id), "state_trace.jsonl")
+        feedback_dir = self._feedback_dir(cve_id)
+        _ensure_dir(feedback_dir)
+
+        # Persistent run meta for long runs / resume after interruption.
+        meta_path = os.path.join(feedback_dir, "run_meta.json")
+        if os.path.exists(meta_path):
+            try:
+                run_meta = _read_json(meta_path)
+                if not isinstance(run_meta, dict):
+                    run_meta = {}
+            except Exception:
+                run_meta = {}
+        else:
+            run_meta = {}
+
+        if not run_meta.get("started_at_utc"):
+            run_meta["started_at_utc"] = datetime.utcnow().isoformat() + "Z"
+        run_meta.setdefault("case_id", cve_id)
+        run_meta.setdefault("ir_root", self.ir_root)
+        run_meta.setdefault("elapsed_seconds_total", 0.0)
+
+        invocation_start = time.time()
+
+        # Persist meta early so an interrupted run still has a start marker.
+        run_meta["last_updated_at_utc"] = datetime.utcnow().isoformat() + "Z"
+        try:
+            _write_json(meta_path, run_meta)
+        except Exception:
+            pass
+
+        trace_path = os.path.join(feedback_dir, "state_trace.jsonl")
         state = "INIT"
 
         def _trace(event: str, to_state: str, artifacts: Optional[dict] = None) -> None:
@@ -1713,16 +2068,100 @@ class FeedbackLoopController:
 
         _trace("start_case", "PLAN_READY")
 
+        # Resume logic: find existing iter directories and continue from next iteration.
+        existing_iters: List[int] = []
+        try:
+            for name in os.listdir(feedback_dir):
+                m = re.match(r"^iter_(\d+)$", name)
+                if m:
+                    existing_iters.append(int(m.group(1)))
+        except Exception:
+            existing_iters = []
+        existing_iters = sorted(set(i for i in existing_iters if i > 0))
+
+        start_iter = (max(existing_iters) + 1) if existing_iters else 1
+
+        # Recover repeat counters from previous iterations (best-effort).
+        last_primary_failure = None
+        repeat_count = 0
+        last_regen_mode: Optional[str] = None
+        history: List[dict] = []
+        if existing_iters:
+            for it in existing_iters:
+                it_dir = self._iter_dir(cve_id, it)
+                fr_path = os.path.join(it_dir, "failure_report.json")
+                rp_path = os.path.join(it_dir, "regen_plan.json")
+                vs_path = os.path.join(it_dir, "validation_summary.json")
+                try:
+                    fr = _read_json(fr_path) if os.path.exists(fr_path) else {}
+                    primary = fr.get("primary_failure_type")
+                    if primary and primary == last_primary_failure:
+                        repeat_count += 1
+                    elif primary:
+                        last_primary_failure = primary
+                        repeat_count = 1
+                except Exception:
+                    pass
+
+                try:
+                    rp = _read_json(rp_path) if os.path.exists(rp_path) else {}
+                    scope = rp.get("rerun_scope", {}) if isinstance(rp, dict) else {}
+                    if isinstance(scope, dict) and scope.get("mode"):
+                        last_regen_mode = scope.get("mode")
+                except Exception:
+                    pass
+
+                try:
+                    vs = _read_json(vs_path) if os.path.exists(vs_path) else {}
+                    delta = (vs.get("run", {}) or {}).get("delta", {}) or {}
+                    vuln_hits = int(delta.get("vulnerable_results", 0) or 0)
+                    fixed_hits = int(delta.get("fixed_results", 0) or 0)
+                    history.append(
+                        {
+                            "iteration": it,
+                            "primary_failure_type": last_primary_failure,
+                            "regen_mode": last_regen_mode,
+                            "metrics": {"vuln_hits": vuln_hits, "fixed_hits": fixed_hits},
+                        }
+                    )
+                except Exception:
+                    pass
+
+        # Base session id shared by multiple Coco sessions within the loop.
+        # Individual stages will derive role-specific sessions from this base.
+        os.environ.setdefault("COCO_SESSION_ID_BASE", f"vulnsynth-loop-{cve_id}")
+
+        # Cleanup any orphaned MCP/LSP processes left by previous runs.
+        _cleanup_orphan_mcp_processes()
+
+        # Reuse agent objects/backends across the whole loop run.
+        plan_agent = VulnSynthPlanAgent(
+            working_dir=self.working_dir,
+            agent=self.agent,
+            model=self.model,
+            ablation_mode=self.ablation_mode,
+            codex_use_local_config=True,
+        )
+        gen_agent = VulnSynthGenAgent(
+            working_dir=self.working_dir,
+            agent=self.agent,
+            model=self.model,
+            ablation_mode=self.ablation_mode,
+            codex_use_local_config=True,
+        )
+        valid_agent = VulnSynthValidAgent(working_dir=self.working_dir)
+
+        # Cleanup control: best-effort cleanup for orphaned MCP/LSP processes.
+        os.environ.setdefault("VULNSYNTH_CLEANUP_ORPHAN_MCP_ON_EXIT", "1")
+
+        def _maybe_cleanup_orphans() -> None:
+            if str(os.environ.get("VULNSYNTH_CLEANUP_ORPHAN_MCP_ON_EXIT", "1")).strip() in ("0", "false", "False"):
+                return
+            _cleanup_orphan_mcp_processes()
+
         # Ensure plan exists.
         l1_path, l2_path, l3_path = _load_case_ir_paths(ir_case_dir)
         if not (os.path.exists(l1_path) and os.path.exists(l2_path) and os.path.exists(l3_path)):
-            plan_agent = VulnSynthPlanAgent(
-                working_dir=self.working_dir,
-                agent=self.agent,
-                model=self.model,
-                ablation_mode=self.ablation_mode,
-                codex_use_local_config=True,
-            )
             await plan_agent.analyze(cve_id, output_root=self.ir_root)
         _trace("plan_ok", "GEN_QUERY", {"ir_case_dir": ir_case_dir})
 
@@ -1730,23 +2169,29 @@ class FeedbackLoopController:
         gen_dir = os.path.join(ir_case_dir, self.generation_subdir)
         final_query_json_path = os.path.join(gen_dir, "final_query.json")
         if not os.path.exists(final_query_json_path):
-            gen_agent = VulnSynthGenAgent(
-                working_dir=self.working_dir,
-                agent=self.agent,
-                model=self.model,
-                ablation_mode=self.ablation_mode,
-                codex_use_local_config=True,
-            )
             await gen_agent.generate(cve_id, ir_root=self.ir_root, generation_subdir=self.generation_subdir)
         _trace("gen_ok", "VALIDATE_COMPILE", {"generated_query_dir": gen_dir})
 
-        valid_agent = VulnSynthValidAgent(working_dir=self.working_dir)
-
         last_summary_path = ""
-        last_primary_failure = None
-        repeat_count = 0
-        recent_failures: List[str] = []
-        for iteration in range(1, self.max_iters + 1):
+
+        if start_iter > self.max_iters:
+            _trace("budget_exhausted", "TERMINAL_FAIL", {"reason": "resume_start_iter_exceeds_max_iters"})
+            final_fail = {
+                "status": "failed",
+                "iterations": self.max_iters,
+                "summary_path": last_summary_path,
+                "primary_failure_type": last_primary_failure,
+                "repeat_count": repeat_count,
+            }
+            run_meta["elapsed_seconds_total"] = float(run_meta.get("elapsed_seconds_total", 0.0) or 0.0) + (time.time() - invocation_start)
+            run_meta["last_updated_at_utc"] = datetime.utcnow().isoformat() + "Z"
+            _write_json(meta_path, run_meta)
+            _write_json(os.path.join(feedback_dir, "final_failure_summary.json"), final_fail)
+            final_fail["runtime_seconds_total"] = run_meta.get("elapsed_seconds_total")
+            _maybe_cleanup_orphans()
+            return final_fail
+
+        for iteration in range(start_iter, self.max_iters + 1):
             iter_dir = self._iter_dir(cve_id, iteration)
             _ensure_dir(iter_dir)
 
@@ -1765,6 +2210,10 @@ class FeedbackLoopController:
             validation_summary = _read_json(last_summary_path)
             _write_json(os.path.join(iter_dir, "validation_summary.json"), validation_summary)
 
+            # Iteration-level housekeeping: reap orphaned MCP/LSP processes that can
+            # accumulate across iterations (PPID=1 only).
+            _maybe_cleanup_orphans()
+
             if not validation_summary.get("compile", {}).get("success"):
                 _trace("compile_fail", "ANALYZE_FAILURE", {"summary_path": last_summary_path})
             else:
@@ -1776,7 +2225,16 @@ class FeedbackLoopController:
                     os.path.join(iter_dir, "result.json"),
                     {"status": "success", "summary_path": last_summary_path},
                 )
-                return {"status": "success", "iterations": iteration, "summary_path": last_summary_path}
+                run_meta["elapsed_seconds_total"] = float(run_meta.get("elapsed_seconds_total", 0.0) or 0.0) + (time.time() - invocation_start)
+                run_meta["last_updated_at_utc"] = datetime.utcnow().isoformat() + "Z"
+                _write_json(meta_path, run_meta)
+                _maybe_cleanup_orphans()
+                return {
+                    "status": "success",
+                    "iterations": iteration,
+                    "summary_path": last_summary_path,
+                    "runtime_seconds_total": run_meta.get("elapsed_seconds_total"),
+                }
 
             # Failure path: analyze + update + plan selective regeneration
             _trace("eval_fail", "ANALYZE_FAILURE", {"summary_path": last_summary_path})
@@ -1786,12 +2244,8 @@ class FeedbackLoopController:
 
             primary = failure_report.get("primary_failure_type")
 
-            # Detect oscillation in primary failure types (doc section 19.2 T2).
-            if primary:
-                recent_failures.append(str(primary))
-                recent_failures = recent_failures[-4:]
-                if len(recent_failures) >= 4 and len(set(recent_failures)) >= 3:
-                    primary = "failure_oscillation"
+            # Regen fallback trigger T2: soft reset (from L1) didn't fix -> full reset.
+            force_full_reset = bool(last_regen_mode == "fallback_replan_from_l1")
 
             if primary and primary == last_primary_failure:
                 repeat_count += 1
@@ -1824,6 +2278,49 @@ class FeedbackLoopController:
                 primary_failure_type=primary,
                 failure_repeat_count=repeat_count,
             )
+
+            # Fallback trigger T1: 2 consecutive unknown failures -> fallback_replan_from_l1.
+            if primary == "unknown_failure" and repeat_count >= 2:
+                regen_plan["rerun_scope"] = {"mode": "fallback_replan_from_l1"}
+                regen_plan["reason"] = "T1: consecutive unknown_failure >= 2"
+
+            # Fallback trigger T2: after fallback_replan_from_l1, still failing -> full reset.
+            if force_full_reset:
+                regen_plan["rerun_scope"] = {"mode": "fallback_full_replan_from_inputs"}
+                regen_plan["reason"] = "T2: soft reset from L1 did not converge"
+
+            # Fallback trigger T3: local patch 3 rounds without metric improvement -> fallback from L1.
+            # Use metrics from validation_summary: vuln_hits should increase OR fixed_hits should decrease.
+            delta = validation_summary.get("run", {}).get("delta", {})
+            vuln_hits = int(delta.get("vulnerable_results", 0) or 0)
+            fixed_hits = int(delta.get("fixed_results", 0) or 0)
+            proposed_mode = (regen_plan.get("rerun_scope", {}) or {}).get("mode")
+            history.append(
+                {
+                    "iteration": iteration,
+                    "primary_failure_type": primary,
+                    "regen_mode": proposed_mode,
+                    "metrics": {"vuln_hits": vuln_hits, "fixed_hits": fixed_hits},
+                }
+            )
+            if len(history) >= 3:
+                window = history[-3:]
+                local_modes = {"rerun_composer_only", "rerun_fragments", "rerun_l3"}
+                if all((e.get("regen_mode") in local_modes) for e in window):
+                    base = window[0].get("metrics", {})
+                    improved = False
+                    prev_v = int(base.get("vuln_hits", 0) or 0)
+                    prev_f = int(base.get("fixed_hits", 0) or 0)
+                    for e in window[1:]:
+                        m = e.get("metrics", {})
+                        v = int(m.get("vuln_hits", 0) or 0)
+                        f = int(m.get("fixed_hits", 0) or 0)
+                        if v > prev_v or f < prev_f:
+                            improved = True
+                        prev_v, prev_f = v, f
+                    if not improved and not force_full_reset and not (primary == "unknown_failure" and repeat_count >= 2):
+                        regen_plan["rerun_scope"] = {"mode": "fallback_replan_from_l1"}
+                        regen_plan["reason"] = "T3: local patch >= 3 without improvement"
             _write_json(os.path.join(iter_dir, "regen_plan.json"), regen_plan)
             _trace("update_ok", "PLAN_REGEN_SCOPE", {"regen_plan": regen_plan.get("rerun_scope", {})})
 
@@ -1863,23 +2360,7 @@ class FeedbackLoopController:
                             os.remove(l1_path)
                     except Exception:
                         pass
-
-                plan_agent = VulnSynthPlanAgent(
-                    working_dir=self.working_dir,
-                    agent=self.agent,
-                    model=self.model,
-                    ablation_mode=self.ablation_mode,
-                    codex_use_local_config=True,
-                )
                 await plan_agent.analyze(cve_id, output_root=self.ir_root)
-
-                gen_agent = VulnSynthGenAgent(
-                    working_dir=self.working_dir,
-                    agent=self.agent,
-                    model=self.model,
-                    ablation_mode=self.ablation_mode,
-                    codex_use_local_config=True,
-                )
                 _trace("rerun_gen", "GEN_QUERY", {"mode": mode})
                 await gen_agent.generate(
                     cve_id,
@@ -1890,18 +2371,12 @@ class FeedbackLoopController:
                     reuse_existing_fragments=False,
                 )
                 _trace("gen_ok", "VALIDATE_COMPILE")
+                last_regen_mode = mode
                 continue
 
             # PLAN regeneration (L1/L2/L3)
             if scope.get("rerun_l1") or scope.get("rerun_l2") or scope.get("rerun_l3"):
                 _trace("rerun_plan", "PLAN_READY", scope)
-                plan_agent = VulnSynthPlanAgent(
-                    working_dir=self.working_dir,
-                    agent=self.agent,
-                    model=self.model,
-                    ablation_mode=self.ablation_mode,
-                    codex_use_local_config=True,
-                )
                 await plan_agent.analyze_partial(
                     cve_id,
                     output_root=self.ir_root,
@@ -1910,14 +2385,6 @@ class FeedbackLoopController:
                     rerun_l3=bool(scope.get("rerun_l3")),
                 )
                 _trace("plan_ok", "GEN_QUERY")
-
-            gen_agent = VulnSynthGenAgent(
-                working_dir=self.working_dir,
-                agent=self.agent,
-                model=self.model,
-                ablation_mode=self.ablation_mode,
-                codex_use_local_config=True,
-            )
             _trace("rerun_gen", "GEN_QUERY", scope)
             await gen_agent.generate(
                 cve_id,
@@ -1928,6 +2395,7 @@ class FeedbackLoopController:
                 reuse_existing_fragments=not bool(scope.get("rerun_all_fragments")),
             )
             _trace("gen_ok", "VALIDATE_COMPILE")
+            last_regen_mode = scope.get("mode") if isinstance(scope, dict) else None
 
         _trace("budget_exhausted", "TERMINAL_FAIL", {"summary_path": last_summary_path})
         final_fail = {
@@ -1937,7 +2405,12 @@ class FeedbackLoopController:
             "primary_failure_type": last_primary_failure,
             "repeat_count": repeat_count,
         }
-        _write_json(os.path.join(self._feedback_dir(cve_id), "final_failure_summary.json"), final_fail)
+        run_meta["elapsed_seconds_total"] = float(run_meta.get("elapsed_seconds_total", 0.0) or 0.0) + (time.time() - invocation_start)
+        run_meta["last_updated_at_utc"] = datetime.utcnow().isoformat() + "Z"
+        _write_json(meta_path, run_meta)
+        _write_json(os.path.join(feedback_dir, "final_failure_summary.json"), final_fail)
+        final_fail["runtime_seconds_total"] = run_meta.get("elapsed_seconds_total")
+        _maybe_cleanup_orphans()
         return final_fail
 
 
@@ -2038,6 +2511,8 @@ async def main() -> None:
         print(f"Status: {result['status']}")
         print(f"Iterations: {result['iterations']}")
         print(f"Last validation summary: {result.get('summary_path', '')}")
+        if result.get("runtime_seconds_total") is not None:
+            print(f"Runtime seconds (total): {result.get('runtime_seconds_total')}")
 
 
 if __name__ == "__main__":

@@ -100,6 +100,17 @@ class CocoBackend(AgentBackend):
             "--json",
         ]
 
+        # Reuse a stable session id when provided. This helps avoid creating a new
+        # Coco session for every stage/iteration (and may reduce background resource churn).
+        session_id = str(env.get("COCO_SESSION_ID", "")).strip()
+        if session_id:
+            cmd.extend(["--session-id", session_id])
+
+        # Optional: resume a specific session id (or AUTO).
+        resume = str(env.get("COCO_RESUME", "")).strip()
+        if resume:
+            cmd.extend(["--resume", resume])
+
         # Allow callers to override config per invocation.
         # Always keep plugin sync disabled to avoid hangs in restricted networks.
         cmd.extend(["-c", "features.remote_plugin_sync=false"])
@@ -156,4 +167,3 @@ class CocoBackend(AgentBackend):
         if self.ablation_mode == "no_tools":
             return prompts.refinement_no_tools(task, previous_feedback, iteration)
         return prompts.refinement_full(task, previous_feedback, iteration, collection_name)
-

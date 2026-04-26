@@ -85,7 +85,10 @@ class AgentBackend(ABC):
 
         for pattern in [
             "pkill -f 'chroma-mcp'",
+            # The CodeQL MCP server binary name has changed across environments.
+            "pkill -f 'codeql-lsp-mcp/dist/index.js'",
             "pkill -f 'codeql-mcp/dist/index.js'",
+            "pkill -f 'codeql execute language-server'",
             "pkill -f 'codeql.*language-server'",
         ]:
             try:
