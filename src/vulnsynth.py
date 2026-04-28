@@ -42,6 +42,202 @@ except Exception:
 LOGGER = logging.getLogger("vulnsynth")
 
 
+def _read_patch_policy_yaml(policy_path: str) -> Dict[str, Any]:
+    """Load the minimal patch policy YAML.
+
+    Prefer PyYAML when available; otherwise fall back to a tiny parser that
+    supports the limited structure used in `patch_policy.yaml`.
+    """
+
+    text = _read_text(policy_path)
+    # First try PyYAML if installed.
+    try:
+        import yaml  # type: ignore
+
+        data = yaml.safe_load(text)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        pass
+
+    # Minimal fallback parser for this repo's patch_policy.yaml.
+    lines = [ln.rstrip("\n") for ln in text.splitlines()]
+    policy: Dict[str, Any] = {"allowed_ops": [], "safety": {}, "files": {}}
+    i = 0
+    current_section: Optional[str] = None
+    current_file: Optional[str] = None
+    while i < len(lines):
+        raw = lines[i]
+        i += 1
+        s = raw.strip()
+        if not s or s.startswith("#"):
+            continue
+
+        if s.endswith(":") and not s.startswith("-"):
+            key = s[:-1].strip()
+            if key in ("allowed_ops", "safety", "files"):
+                current_section = key
+                current_file = None
+                continue
+            # file name under files:
+            if current_section == "files" and key:
+                current_file = key
+                policy["files"].setdefault(current_file, {"allowed_paths": []})
+                continue
+
+        if current_section == "allowed_ops" and s.startswith("-"):
+            policy["allowed_ops"].append(s.lstrip("-").strip())
+            continue
+
+        if current_section == "safety" and ":" in s:
+            k, v = [p.strip() for p in s.split(":", 1)]
+            if v.lower() in ("true", "false"):
+                policy["safety"][k] = v.lower() == "true"
+            else:
+                try:
+                    policy["safety"][k] = int(v)
+                except Exception:
+                    policy["safety"][k] = v
+            continue
+
+        # Allowed paths under files/<file>/allowed_paths
+        if current_section == "files":
+            if s.startswith("allowed_paths:"):
+                continue
+            if current_file and s.startswith("-"):
+                policy["files"][current_file].setdefault("allowed_paths", []).append(s.lstrip("-").strip())
+                continue
+
+    return policy
+
+
+def _json_pointer_unescape(seg: str) -> str:
+    return seg.replace("~1", "/").replace("~0", "~")
+
+
+def _split_json_pointer(ptr: str) -> List[str]:
+    ptr = str(ptr or "").strip()
+    if ptr == "":
+        return []
+    if not ptr.startswith("/"):
+        raise ValueError(f"Invalid JSON Pointer (must start with '/'): {ptr!r}")
+    parts = ptr.split("/")[1:]
+    return [_json_pointer_unescape(p) for p in parts]
+
+
+def _path_matches_pattern(pattern: str, path: str) -> bool:
+    """Match JSON Pointer `path` against policy `pattern`.
+
+    Policy patterns support `*` as a single-segment wildcard.
+    """
+
+    try:
+        p_segs = _split_json_pointer(pattern)
+        s_segs = _split_json_pointer(path)
+    except Exception:
+        return False
+    if len(p_segs) != len(s_segs):
+        return False
+    for a, b in zip(p_segs, s_segs):
+        if a == "*":
+            continue
+        if a != b:
+            return False
+    return True
+
+
+def _get_at_pointer(doc: Any, ptr: str) -> Any:
+    cur = doc
+    for seg in _split_json_pointer(ptr):
+        if isinstance(cur, list):
+            idx = int(seg)
+            cur = cur[idx]
+        elif isinstance(cur, dict):
+            cur = cur[seg]
+        else:
+            raise KeyError(f"Cannot traverse into non-container at segment {seg!r}")
+    return cur
+
+
+def _ensure_container_for_set(parent: Any, seg: str) -> None:
+    # Best-effort helper: no-op if container already exists.
+    if isinstance(parent, dict):
+        parent.setdefault(seg, {})
+
+
+def _set_at_pointer(doc: Any, ptr: str, value: Any, *, replace_with_many: bool = False) -> Any:
+    segs = _split_json_pointer(ptr)
+    if not segs:
+        return value
+    cur = doc
+    for seg in segs[:-1]:
+        if isinstance(cur, list):
+            cur = cur[int(seg)]
+        else:
+            if not isinstance(cur, dict):
+                raise KeyError(f"Cannot traverse into non-container at segment {seg!r}")
+            if seg not in cur or not isinstance(cur[seg], (dict, list)):
+                cur[seg] = {}
+            cur = cur[seg]
+    last = segs[-1]
+    if isinstance(cur, list):
+        idx = int(last)
+        if replace_with_many and isinstance(value, list):
+            cur[idx:idx + 1] = value
+        else:
+            cur[idx] = value
+    elif isinstance(cur, dict):
+        cur[last] = value
+    else:
+        raise KeyError(f"Cannot set into non-container at {ptr!r}")
+    return doc
+
+
+def _remove_at_pointer(doc: Any, ptr: str) -> Any:
+    segs = _split_json_pointer(ptr)
+    if not segs:
+        return None
+    cur = doc
+    for seg in segs[:-1]:
+        if isinstance(cur, list):
+            cur = cur[int(seg)]
+        else:
+            cur = cur[seg]
+    last = segs[-1]
+    if isinstance(cur, list):
+        del cur[int(last)]
+    else:
+        cur.pop(last, None)
+    return doc
+
+
+def _merge_value(existing: Any, incoming: Any) -> Any:
+    if isinstance(existing, dict) and isinstance(incoming, dict):
+        out = dict(existing)
+        out.update(incoming)
+        return out
+    if isinstance(existing, list) and isinstance(incoming, list):
+        out = list(existing)
+        seen = set()
+        for it in out:
+            try:
+                seen.add(json.dumps(it, sort_keys=True, ensure_ascii=False))
+            except Exception:
+                pass
+        for it in incoming:
+            key = None
+            try:
+                key = json.dumps(it, sort_keys=True, ensure_ascii=False)
+            except Exception:
+                key = None
+            if key is not None and key in seen:
+                continue
+            out.append(it)
+            if key is not None:
+                seen.add(key)
+        return out
+    return incoming
+
+
 def _cleanup_orphan_mcp_processes() -> Dict[str, int]:
     """Best-effort cleanup for orphaned MCP/LSP processes.
 
@@ -604,11 +800,42 @@ def _build_collection_registry(language: str, nvd_cache: str) -> Dict[str, list[
 
 
 def _build_query_views(step: Dict[str, Any]) -> Dict[str, str]:
-    hints = step.get("retrieval_hints", {})
-    keywords = hints.get("keywords", [])
-    classes = hints.get("candidate_classes", [])
-    predicates = hints.get("candidate_predicates", [])
-    patterns = hints.get("reference_query_patterns", [])
+    raw_hints = step.get("retrieval_hints", {})
+    hints: Dict[str, Any] = raw_hints if isinstance(raw_hints, dict) else {}
+
+    # Backward/forward compatibility: some L3 plans use `retrieval_hints` as a
+    # list of free-form strings rather than a structured dict.
+    if not hints and isinstance(raw_hints, (list, tuple)):
+        merged: list[str] = []
+        for it in raw_hints:
+            s = str(it).strip()
+            if not s:
+                continue
+            merged.append(s)
+            # Prefer explicit identifiers if present (often in backticks).
+            try:
+                merged.extend([t.strip() for t in re.findall(r"`([^`]+)`", s) if t.strip()])
+            except Exception:
+                pass
+        hints = {"keywords": merged}
+    elif not hints and isinstance(raw_hints, str) and raw_hints.strip():
+        hints = {"keywords": [raw_hints.strip()]}
+
+    def _as_list(v: Any) -> list:
+        if v is None:
+            return []
+        if isinstance(v, list):
+            return v
+        if isinstance(v, tuple):
+            return list(v)
+        if isinstance(v, str):
+            return [v]
+        return [v]
+
+    keywords = _as_list(hints.get("keywords", []))
+    classes = _as_list(hints.get("candidate_classes", []))
+    predicates = _as_list(hints.get("candidate_predicates", []))
+    patterns = _as_list(hints.get("reference_query_patterns", []))
     semantic_base = step.get("description") or step.get("goal") or step.get("semantic_unit") or ""
     return {
         "semantic_query": semantic_base.strip(),
@@ -658,14 +885,34 @@ def build_step_retrieval_plan(step: Dict[str, Any], language: str, nvd_cache: st
             }
         )
 
+    # Allowlist the exact collections the model may query for this step.
+    # This mitigates cross-language drift when other similarly-named collections exist.
+    allowed_collection_names = sorted({str(k) for k in collection_queries.keys() if str(k).strip()})
+
+    # Optional per-collection metadata filters for Chroma queries.
+    # Not all collections have a `language` metadata field (for example `codeql_ql_reference`),
+    # so only provide filters where we know ingestion typically sets them.
+    collection_where_filters: Dict[str, Dict[str, Any]] = {}
+    if language == "java":
+        for cname in ("java_codeql_stdlib", "java_codeql_language_guides", "java_codeql_local_queries"):
+            if cname in collection_queries:
+                collection_where_filters[cname] = {"language": "java"}
+    elif language == "cpp":
+        for cname in ("cpp_codeql_stdlib", "cpp_codeql_language_guides", "cpp_codeql_local_queries"):
+            if cname in collection_queries:
+                collection_where_filters[cname] = {"language": "cpp"}
+
+    step_id = step.get("step_id") or step.get("id")
     return {
-        "step_id": step.get("step_id"),
+        "step_id": step_id,
         "language": language,
         "retrieval_targets": targets,
         "global_collections": registry["global"],
         "language_collections": registry["language_specific"],
         "query_views": query_views,
         "collection_query_map": collection_queries,
+        "allowed_collection_names": allowed_collection_names,
+        "collection_where_filters": collection_where_filters,
     }
 
 
@@ -688,6 +935,64 @@ class VulnSynthPlanAgent:
             use_local_config=codex_use_local_config,
         )
 
+    @staticmethod
+    def _compact_text(s: Any, *, max_len: int) -> Any:
+        if not isinstance(s, str):
+            return s
+        s = s.strip()
+        if len(s) <= max_len:
+            return s
+        return s[: max(0, max_len - 1)] + "…"
+
+    @classmethod
+    def _compact_fact_list(cls, xs: Any, *, max_items: int, max_fact_len: int = 400) -> list:
+        if not isinstance(xs, list):
+            return []
+        out: list = []
+        for it in xs[: max(0, int(max_items))]:
+            if isinstance(it, dict):
+                keep = {}
+                for k in ("file", "line", "fact", "diff_file", "source"):
+                    if k in it:
+                        v = it.get(k)
+                        if k == "fact":
+                            v = cls._compact_text(v, max_len=max_fact_len)
+                        keep[k] = v
+                out.append(keep or it)
+            else:
+                out.append(it)
+        return out
+
+    @classmethod
+    def _compact_l1_for_prompt(cls, l1: Any) -> Any:
+        if not isinstance(l1, dict):
+            return l1
+        return {
+            "layer": l1.get("layer"),
+            "cve_id": l1.get("cve_id"),
+            "repo_path": l1.get("repo_path"),
+            "diff_path": l1.get("diff_path"),
+            "pattern_summary": cls._compact_text(l1.get("pattern_summary"), max_len=1200),
+            "code_facts": cls._compact_fact_list(l1.get("code_facts"), max_items=20),
+            "patch_facts": cls._compact_fact_list(l1.get("patch_facts"), max_items=12),
+            "environment_facts": cls._compact_fact_list(l1.get("environment_facts"), max_items=10),
+        }
+
+    @classmethod
+    def _compact_l2_for_prompt(cls, l2: Any) -> Any:
+        if not isinstance(l2, dict):
+            return l2
+        return {
+            "layer": l2.get("layer"),
+            "schema_version": l2.get("schema_version"),
+            "cve_id": l2.get("cve_id"),
+            "pattern_type": l2.get("pattern_type"),
+            "summary": cls._compact_text(l2.get("summary"), max_len=1600),
+            "constraints": cls._compact_fact_list(l2.get("constraints"), max_items=20),
+            "guards_and_conditions": cls._compact_fact_list(l2.get("guards_and_conditions"), max_items=20),
+            "reporting": (l2.get("reporting") if isinstance(l2.get("reporting"), dict) else {}),
+        }
+
     async def _run_stage(
         self,
         stage_name: str,
@@ -698,35 +1003,97 @@ class VulnSynthPlanAgent:
         _write_text(prompt_path, prompt)
 
         env = os.environ.copy()
-        # Multi-session support for Coco: allow a stable base session id and derive
-        # a role-specific session for plan stages.
-        base_session = str(env.get("COCO_SESSION_ID_BASE", "") or env.get("COCO_SESSION_ID", "")).strip()
-        if base_session:
-            env["COCO_SESSION_ID"] = f"{base_session}::plan"
 
-        result = await self.backend.execute_prompt(
-            prompt=prompt,
-            env=env,
-            cwd=self.working_dir,
-            phase_name=stage_name,
-        )
+        # Avoid long-running Coco calls from blocking the loop indefinitely.
+        # Plan stages can be retrieval-heavy; keep bounded.
+        if stage_name in ("stage1_l1", "stage2_l2", "stage3_l3"):
+            # Plan stages can still be retrieval-heavy on larger repos.
+            env.setdefault("COCO_QUERY_TIMEOUT_SEC", "600")
 
-        stdout_path = os.path.join(output_dir, f"{stage_name}_stdout.jsonl")
-        stderr_path = os.path.join(output_dir, f"{stage_name}_stderr.log")
-        _write_text(stdout_path, result.get("stdout", ""))
-        _write_text(stderr_path, result.get("stderr", ""))
+        # Default: avoid Coco session persistence to prevent conversation bloat.
+        # VulnSynth includes full context in each prompt, so sessions are unnecessary.
+        use_sessions = str(env.get("VULNSYNTH_USE_COCO_SESSIONS", "0")).strip() in ("1", "true", "True")
+        if not use_sessions:
+            env.pop("COCO_SESSION_ID", None)
+            env.pop("COCO_RESUME", None)
+        else:
+            # Multi-session support for Coco: allow a stable base session id and derive
+            # a role-specific session for plan stages.
+            base_session = str(env.get("COCO_SESSION_ID_BASE", "") or env.get("COCO_SESSION_ID", "")).strip()
+            if base_session:
+                env["COCO_SESSION_ID"] = f"{base_session}::plan"
 
-        if result.get("returncode", 1) != 0:
-            raise RuntimeError(
-                f"{stage_name} failed with return code {result.get('returncode')}: "
-                f"{result.get('stderr', '').strip()}"
+        def _looks_like_coco_trace(obj: Any) -> bool:
+            return isinstance(obj, dict) and (
+                ("agent_states" in obj and "session_id" in obj) or ("stats" in obj and "agent_states" in obj)
             )
 
-        text_output = self.backend.extract_text_output(result.get("stdout", ""))
-        _write_text(os.path.join(output_dir, f"{stage_name}_assistant.txt"), text_output)
-        parsed = _extract_json_object(text_output)
-        _write_json(os.path.join(output_dir, f"{stage_name}_parsed.json"), parsed)
-        return parsed
+        def _validate_contract(stage: str, parsed_obj: Any) -> None:
+            """Fail fast when the model returns a trace / wrong-shaped output."""
+            if _looks_like_coco_trace(parsed_obj):
+                raise RuntimeError(f"{stage} returned a Coco trace instead of the required JSON object")
+            if not isinstance(parsed_obj, dict):
+                raise RuntimeError(f"{stage} did not return a JSON object")
+
+            expected_layer = {
+                "stage1_l1": "L1_fact",
+                "stage2_l2": "L2_schema_ir",
+                "stage3_l3": "L3_query_construction_steps",
+            }.get(stage)
+            if expected_layer is not None:
+                layer = str(parsed_obj.get("layer", "") or "").strip()
+                if layer != expected_layer:
+                    raise RuntimeError(f"{stage} returned layer={layer!r}, expected {expected_layer!r}")
+
+            if stage == "stage1_l1":
+                ps = str(parsed_obj.get("pattern_summary", "") or "").strip()
+                if not ps:
+                    raise RuntimeError("stage1_l1 missing non-empty pattern_summary")
+            if stage == "compose_final_query":
+                qc = str(parsed_obj.get("query_code", "") or "").strip()
+                if not qc:
+                    raise RuntimeError("compose_final_query produced empty query_code")
+
+        async def _exec_once(p: str) -> Dict[str, Any]:
+            result = await self.backend.execute_prompt(
+                prompt=p,
+                env=env,
+                cwd=self.working_dir,
+                phase_name=stage_name,
+            )
+
+            stdout_path = os.path.join(output_dir, f"{stage_name}_stdout.jsonl")
+            stderr_path = os.path.join(output_dir, f"{stage_name}_stderr.log")
+            _write_text(stdout_path, result.get("stdout", ""))
+            _write_text(stderr_path, result.get("stderr", ""))
+
+            if result.get("returncode", 1) != 0:
+                raise RuntimeError(
+                    f"{stage_name} failed with return code {result.get('returncode')}: "
+                    f"{result.get('stderr', '').strip()}"
+                )
+
+            text_output = self.backend.extract_text_output(result.get("stdout", ""))
+            _write_text(os.path.join(output_dir, f"{stage_name}_assistant.txt"), text_output)
+            parsed = _extract_json_object(text_output)
+            _write_json(os.path.join(output_dir, f"{stage_name}_parsed.json"), parsed)
+            _validate_contract(stage_name, parsed)
+            return parsed
+
+        # Some models may attempt to use interactive planning tools or return a full
+        # trace instead of the required JSON. Retry once with a stricter reminder.
+        try:
+            return await _exec_once(prompt)
+        except Exception as e:
+            self.logger.warning(f"{stage_name}: first attempt failed validation: {e}")
+            stricter = (
+                prompt
+                + "\n\n# STRICT OUTPUT REMINDER\n"
+                + "- Do NOT call `TodoWrite`.\n"
+                + "- Do NOT output tool traces or system messages.\n"
+                + "- Return ONLY the single JSON object required by the Output Contract.\n"
+            )
+            return await _exec_once(stricter)
 
     async def analyze(self, cve_id: str, output_root: str = "src/IR") -> Dict[str, str]:
         cve_dir, repo_path, diff_path = discover_cve_paths(cve_id)
@@ -771,6 +1138,9 @@ class VulnSynthPlanAgent:
             vulnsynth_prompts.build_l1_prompt(task),
             output_dir,
         )
+        # Safety: keep the L1 object compact enough to fit within OS ARG_MAX when
+        # embedding into later prompts.
+        l1 = self._compact_l1_for_prompt(l1)
         _write_json(os.path.join(output_dir, "cve_facts.json"), l1)
 
         self.logger.info("Stage 2/3: generating L2 schema IR")
@@ -779,6 +1149,7 @@ class VulnSynthPlanAgent:
             vulnsynth_prompts.build_l2_prompt(task, json.dumps(l1, indent=2, ensure_ascii=False)),
             output_dir,
         )
+        l2 = self._compact_l2_for_prompt(l2)
         _write_json(os.path.join(output_dir, "codeql_schema_ir.json"), l2)
 
         self.logger.info("Stage 3/3: generating L3 query construction steps")
@@ -844,9 +1215,13 @@ class VulnSynthPlanAgent:
         if rerun_l1 or not os.path.exists(l1_path):
             self.logger.info("Plan partial: regenerating L1")
             l1 = await self._run_stage("stage1_l1", vulnsynth_prompts.build_l1_prompt(task), output_dir)
+            l1 = self._compact_l1_for_prompt(l1)
             _write_json(l1_path, l1)
         else:
             l1 = _read_json(l1_path)
+
+        # Even when loading from disk, ensure L1 used for prompting is compact.
+        l1 = self._compact_l1_for_prompt(l1)
 
         if rerun_l2 or rerun_l1 or not os.path.exists(l2_path):
             self.logger.info("Plan partial: regenerating L2")
@@ -855,9 +1230,12 @@ class VulnSynthPlanAgent:
                 vulnsynth_prompts.build_l2_prompt(task, json.dumps(l1, indent=2, ensure_ascii=False)),
                 output_dir,
             )
+            l2 = self._compact_l2_for_prompt(l2)
             _write_json(l2_path, l2)
         else:
             l2 = _read_json(l2_path)
+
+        l2 = self._compact_l2_for_prompt(l2)
 
         if rerun_l3 or rerun_l2 or rerun_l1 or not os.path.exists(l3_path):
             self.logger.info("Plan partial: regenerating L3")
@@ -899,33 +1277,101 @@ class VulnSynthGenAgent:
         _write_text(prompt_path, prompt)
 
         env = os.environ.copy()
-        # Multi-session support for Coco: derive dedicated sessions for fragment
-        # generation vs final composition.
-        base_session = str(env.get("COCO_SESSION_ID_BASE", "") or env.get("COCO_SESSION_ID", "")).strip()
-        if base_session:
-            role = "compose" if stage_name == "compose_final_query" else "gen"
-            env["COCO_SESSION_ID"] = f"{base_session}::{role}"
 
-        result = await self.backend.execute_prompt(
-            prompt=prompt,
-            env=env,
-            cwd=self.working_dir,
-            phase_name=stage_name,
-        )
+        # Avoid long-running Coco calls from blocking the feedback loop indefinitely.
+        # Coco honors --query-timeout via COCO_QUERY_TIMEOUT_SEC.
+        if stage_name == "diagnose":
+            env.setdefault("COCO_QUERY_TIMEOUT_SEC", "180")
+        elif stage_name == "compose_final_query":
+            # Composition can be retrieval-heavy and may require multiple tool calls.
+            # Keep bounded, but allow more headroom than fragment generation.
+            env.setdefault("COCO_QUERY_TIMEOUT_SEC", "600")
+        elif stage_name.startswith("gen_step_"):
+            # Fragment generation should not hang indefinitely (e.g., MCP/tool stalls).
+            # Keep this high enough for retrieval-heavy steps but bounded.
+            env.setdefault("COCO_QUERY_TIMEOUT_SEC", "600")
 
-        stdout_path = os.path.join(output_dir, f"{stage_name}_stdout.jsonl")
-        stderr_path = os.path.join(output_dir, f"{stage_name}_stderr.log")
-        _write_text(stdout_path, result.get("stdout", ""))
-        _write_text(stderr_path, result.get("stderr", ""))
+        # Default: avoid Coco session persistence to prevent conversation bloat.
+        # VulnSynth includes full context in each prompt, so sessions are unnecessary.
+        use_sessions = str(env.get("VULNSYNTH_USE_COCO_SESSIONS", "0")).strip() in ("1", "true", "True")
+        if not use_sessions:
+            env.pop("COCO_SESSION_ID", None)
+            env.pop("COCO_RESUME", None)
+        else:
+            # Multi-session support for Coco: derive dedicated sessions for fragment
+            # generation vs final composition.
+            base_session = str(env.get("COCO_SESSION_ID_BASE", "") or env.get("COCO_SESSION_ID", "")).strip()
+            if base_session:
+                role = "compose" if stage_name == "compose_final_query" else "gen"
+                env["COCO_SESSION_ID"] = f"{base_session}::{role}"
 
-        if result.get("returncode", 1) != 0:
-            raise RuntimeError(
-                f"{stage_name} failed with return code {result.get('returncode')}: "
-                f"{result.get('stderr', '').strip()}"
+            # Start each stage from a clean session to prevent prompt bloat.
+            try:
+                sid = str(env.get("COCO_SESSION_ID", "")).strip()
+                if sid:
+                    self.backend.cleanup_sessions([sid])
+            except Exception:
+                pass
+
+        def _expected_contract_keys() -> Optional[set[str]]:
+            if stage_name.startswith("gen_step_"):
+                return {
+                    "step_id",
+                    "fragment_type",
+                    "summary",
+                    "required_imports",
+                    "defines_symbols",
+                    "depends_on_symbols",
+                    "codeql_fragment",
+                    "notes",
+                }
+            if stage_name == "compose_final_query":
+                return {"query_file_name", "query_code"}
+            return None
+
+        def _looks_like_coco_trace_obj(obj: Any) -> bool:
+            # A trace has orchestration keys, not the stage's output contract.
+            return isinstance(obj, dict) and (
+                ("agent_states" in obj and "session_id" in obj)
+                or ("agent_states" in obj and "stats" in obj)
+                or ("stats" in obj and "session_id" in obj)
             )
 
-        text_output = self.backend.extract_text_output(result.get("stdout", ""))
-        _write_text(os.path.join(output_dir, f"{stage_name}_assistant.txt"), text_output)
+        def _validate_contract(parsed: Any) -> Optional[str]:
+            if not isinstance(parsed, dict):
+                return "output is not a JSON object"
+            if _looks_like_coco_trace_obj(parsed):
+                return "output looks like a Coco trace (no final assistant answer)"
+            expected = _expected_contract_keys()
+            if expected is None:
+                return None
+            missing = [k for k in sorted(expected) if k not in parsed]
+            if missing:
+                return f"missing required keys: {', '.join(missing)}"
+            return None
+
+        async def _exec_once(*, phase_tag: str, prompt_text: str) -> Dict[str, Any]:
+            result = await self.backend.execute_prompt(
+                prompt=prompt_text,
+                env=env,
+                cwd=self.working_dir,
+                phase_name=phase_tag,
+            )
+            stdout_path = os.path.join(output_dir, f"{phase_tag}_stdout.jsonl")
+            stderr_path = os.path.join(output_dir, f"{phase_tag}_stderr.log")
+            _write_text(stdout_path, result.get("stdout", ""))
+            _write_text(stderr_path, result.get("stderr", ""))
+
+            if result.get("returncode", 1) != 0:
+                raise RuntimeError(
+                    f"{phase_tag} failed with return code {result.get('returncode')}: "
+                    f"{result.get('stderr', '').strip()}"
+                )
+
+            text_output = self.backend.extract_text_output(result.get("stdout", ""))
+            _write_text(os.path.join(output_dir, f"{phase_tag}_assistant.txt"), text_output)
+            result["_text_output"] = text_output
+            return result
 
         def _extract_code_block(text: str) -> str:
             # Prefer fenced CodeQL blocks, but tolerate generic fences.
@@ -1009,51 +1455,78 @@ class VulnSynthGenAgent:
                 ],
             }
 
-        # Normal path: parse JSON output.
-        try:
-            parsed = _extract_json_object(text_output)
-            _write_json(os.path.join(output_dir, f"{stage_name}_parsed.json"), parsed)
-            return parsed
-        except Exception as e:
-            # Persist the parse failure for debugging.
-            _write_text(
-                os.path.join(output_dir, f"{stage_name}_parse_error.log"),
-                f"{type(e).__name__}: {e}\n\n{text_output}\n",
-            )
-
-            salvaged = _salvage_non_json_output()
-            if salvaged is not None:
-                _write_json(os.path.join(output_dir, f"{stage_name}_parsed.json"), salvaged)
-                return salvaged
-
-            # Fallback: ask the model once more to emit *only* a JSON object.
-            repair_prompt = (
-                "Your previous answer did not follow the required Output Contract.\n"
-                "Return EXACTLY ONE JSON object and NOTHING ELSE. No markdown fences.\n"
-                "The JSON object MUST conform to the contract described in the prompt you were given.\n"
-            )
-            repair = await self.backend.execute_prompt(
-                prompt=repair_prompt,
-                env=env,
-                cwd=self.working_dir,
-                phase_name=f"{stage_name}_repair",
-            )
-            repair_stdout_path = os.path.join(output_dir, f"{stage_name}_repair_stdout.jsonl")
-            repair_stderr_path = os.path.join(output_dir, f"{stage_name}_repair_stderr.log")
-            _write_text(repair_stdout_path, repair.get("stdout", ""))
-            _write_text(repair_stderr_path, repair.get("stderr", ""))
-
-            if repair.get("returncode", 1) != 0:
-                raise RuntimeError(
-                    f"{stage_name} repair failed with return code {repair.get('returncode')}: "
-                    f"{repair.get('stderr', '').strip()}"
+        # Retry loop:
+        # - If Coco returns only a trace (common on timeouts), treat as failure and retry.
+        # - If JSON parses but does not match the stage's output contract, retry.
+        # - On retry, append a strict "output only JSON" reminder while preserving full context.
+        last_error: str = ""
+        max_attempts = 3
+        for attempt in range(max_attempts):
+            phase_tag = stage_name if attempt == 0 else f"{stage_name}_retry{attempt}"
+            prompt_text = prompt
+            if attempt > 0:
+                prompt_text = (
+                    prompt
+                    + "\n\n# Output Repair (STRICT)\n"
+                    + "Return EXACTLY ONE JSON object and NOTHING ELSE. No markdown fences.\n"
+                    + "The JSON object MUST conform to the Output Contract described above.\n"
                 )
 
-            repair_text = self.backend.extract_text_output(repair.get("stdout", ""))
-            _write_text(os.path.join(output_dir, f"{stage_name}_repair_assistant.txt"), repair_text)
-            parsed = _extract_json_object(repair_text)
+                # Give retries extra headroom (still bounded).
+                try:
+                    base = int(str(env.get("COCO_QUERY_TIMEOUT_SEC", "0") or "0"))
+                    if base > 0:
+                        env["COCO_QUERY_TIMEOUT_SEC"] = str(max(base, 720))
+                except Exception:
+                    pass
+
+            result = await _exec_once(phase_tag=phase_tag, prompt_text=prompt_text)
+            text_output = str(result.get("_text_output", "") or "")
+
+            if not text_output.strip():
+                last_error = "empty assistant output (likely Coco query timeout / trace-only response)"
+                continue
+
+            # Normal path: parse JSON output.
+            try:
+                parsed = _extract_json_object(text_output)
+            except Exception as e:
+                # Persist the parse failure for debugging.
+                _write_text(
+                    os.path.join(output_dir, f"{phase_tag}_parse_error.log"),
+                    f"{type(e).__name__}: {e}\n\n{text_output}\n",
+                )
+
+                salvaged = _salvage_non_json_output()
+                if salvaged is not None:
+                    err = _validate_contract(salvaged)
+                    if err is None:
+                        parsed = salvaged
+                    else:
+                        last_error = f"salvaged output failed contract: {err}"
+                        continue
+                else:
+                    last_error = f"failed to parse model output as JSON: {type(e).__name__}: {e}"
+                    continue
+
+            err = _validate_contract(parsed)
+            if err is not None:
+                # Save what we got for diagnosis, but retry.
+                try:
+                    _write_json(os.path.join(output_dir, f"{phase_tag}_parsed.json"), parsed)
+                except Exception:
+                    pass
+                last_error = err
+                continue
+
+            # Success: persist canonical artifacts for downstream stages.
+            _write_text(os.path.join(output_dir, f"{stage_name}_assistant.txt"), text_output)
             _write_json(os.path.join(output_dir, f"{stage_name}_parsed.json"), parsed)
+            _write_text(os.path.join(output_dir, f"{stage_name}_stdout.jsonl"), result.get("stdout", ""))
+            _write_text(os.path.join(output_dir, f"{stage_name}_stderr.log"), result.get("stderr", ""))
             return parsed
+
+        raise RuntimeError(f"{stage_name} did not produce valid output after {max_attempts} attempts: {last_error}")
 
     async def generate(
         self,
@@ -1093,6 +1566,52 @@ class VulnSynthGenAgent:
 
         language = _infer_language_from_ir(l1, repo_path)
 
+        # Keep prompts within model/context limits.
+        # The raw L1/L2 can be very large (hundreds of KB) which causes the composer
+        # stage to time out before it can emit JSON. Fragments should carry most of
+        # the required query logic; keep only high-signal fields here.
+        def _compact_fact_list(xs: Any, *, max_items: int) -> list:
+            if not isinstance(xs, list):
+                return []
+            out: list = []
+            for it in xs[: max(0, int(max_items))]:
+                if isinstance(it, dict):
+                    # Preserve common keys but drop unexpected large blobs.
+                    keep = {k: it.get(k) for k in ("file", "line", "fact", "diff_file", "source") if k in it}
+                    out.append(keep or it)
+                else:
+                    out.append(it)
+            return out
+
+        l1_compact: Dict[str, Any] = {}
+        if isinstance(l1, dict):
+            l1_compact = {
+                "layer": l1.get("layer"),
+                "cve_id": l1.get("cve_id"),
+                "repo_path": l1.get("repo_path"),
+                "diff_path": l1.get("diff_path"),
+                "pattern_summary": l1.get("pattern_summary"),
+                "code_facts": _compact_fact_list(l1.get("code_facts"), max_items=12),
+                "patch_facts": _compact_fact_list(l1.get("patch_facts"), max_items=8),
+                "environment_facts": _compact_fact_list(l1.get("environment_facts"), max_items=6),
+            }
+
+        l2_compact: Dict[str, Any] = {}
+        if isinstance(l2, dict):
+            # Keep only schema summary + key constraints for the pattern.
+            l2_compact = {
+                "layer": l2.get("layer"),
+                "schema_version": l2.get("schema_version"),
+                "cve_id": l2.get("cve_id"),
+                "pattern_type": l2.get("pattern_type"),
+                "summary": l2.get("summary"),
+                "constraints": _compact_fact_list(l2.get("constraints"), max_items=10),
+                "reporting": (l2.get("reporting") if isinstance(l2.get("reporting"), dict) else {}),
+            }
+
+        l1_json = json.dumps(l1_compact or l1, indent=2, ensure_ascii=False)
+        l2_json = json.dumps(l2_compact or l2, indent=2, ensure_ascii=False)
+
         # Default base session id for standalone gen runs.
         os.environ.setdefault("COCO_SESSION_ID_BASE", f"vulnsynth-{cve_id}")
         output_dir = os.path.join(ir_case_dir, generation_subdir)
@@ -1112,11 +1631,44 @@ class VulnSynthGenAgent:
         }
         _write_json(os.path.join(output_dir, "metadata.json"), metadata)
 
-        l1_json = json.dumps(l1, indent=2, ensure_ascii=False)
-        l2_json = json.dumps(l2, indent=2, ensure_ascii=False)
-        l3_json = json.dumps(l3, indent=2, ensure_ascii=False)
+        # Keep fragment prompts within model token limits.
+        # The full L3 step list can be large and is mostly redundant because the
+        # current step JSON includes the concrete step contract.
+        l3_compact: Dict[str, Any] = {
+            "layer": l3.get("layer"),
+            "plan_version": l3.get("plan_version"),
+            "case_id": l3.get("case_id"),
+            "goal": l3.get("goal"),
+        }
+        try:
+            steps_list = l3.get("steps")
+            if isinstance(steps_list, list):
+                l3_compact["steps_overview"] = [
+                    {
+                        "step_id": (s or {}).get("step_id") or (s or {}).get("id"),
+                        "semantic_unit": (s or {}).get("semantic_unit"),
+                    }
+                    for s in steps_list
+                    if isinstance(s, dict)
+                ]
+        except Exception:
+            pass
+        l3_json = json.dumps(l3_compact, indent=2, ensure_ascii=False)
 
         rerun_steps_set = set(rerun_steps or [])
+
+        def _forbidden_codeql_symbol(language: str, code: str) -> Optional[str]:
+            """Return the first forbidden symbol found in `code`, else None.
+
+            This is a lightweight guardrail to prevent cross-version / cross-language
+            CodeQL API hallucinations from entering the fragment bundle.
+            """
+            if not isinstance(code, str):
+                return None
+            # CodeQL Java in CodeQL 2.23.x uses `MethodCall` (not `MethodAccess`).
+            if language == "java" and re.search(r"\bMethodAccess\b", code):
+                return "MethodAccess"
+            return None
 
         fragment_bundle: Dict[str, Any] = {
             "case_id": cve_id,
@@ -1124,18 +1676,28 @@ class VulnSynthGenAgent:
             "fragments": [],
         }
 
+        fragment_refs: List[Dict[str, Any]] = []
+
         existing_bundle_path = os.path.join(output_dir, "fragment_bundle.json")
-        if reuse_existing_fragments and not rerun_steps_set and os.path.exists(existing_bundle_path):
+        existing_bundle: Optional[dict] = None
+        if reuse_existing_fragments and os.path.exists(existing_bundle_path):
             try:
-                existing_bundle = _read_json(existing_bundle_path)
-                if isinstance(existing_bundle, dict) and isinstance(existing_bundle.get("fragments"), list):
-                    fragment_bundle["fragments"] = existing_bundle.get("fragments", [])
-                    # Preserve any out-of-band feedback injected by the loop controller.
-                    for k in ("feedback", "feedback_history"):
-                        if k in existing_bundle:
-                            fragment_bundle[k] = existing_bundle[k]
+                loaded = _read_json(existing_bundle_path)
+                if isinstance(loaded, dict):
+                    existing_bundle = loaded
             except Exception:
-                pass
+                existing_bundle = None
+
+        # Always preserve any out-of-band loop control fields from the existing bundle.
+        if isinstance(existing_bundle, dict):
+            for k in ("feedback", "feedback_history", "regen_steps"):
+                if k in existing_bundle:
+                    fragment_bundle[k] = existing_bundle[k]
+
+        # If we are in compose-only mode and we have an existing bundle, reuse its fragments.
+        if reuse_existing_fragments and not rerun_steps_set and isinstance(existing_bundle, dict):
+            if isinstance(existing_bundle.get("fragments"), list):
+                fragment_bundle["fragments"] = existing_bundle.get("fragments", [])
 
         need_generate_any_fragments = not fragment_bundle.get("fragments") or bool(rerun_steps_set)
 
@@ -1144,13 +1706,26 @@ class VulnSynthGenAgent:
             fragment_bundle["fragments"] = []
 
         for index, step in enumerate(steps, start=1):
-            step_id = step.get("step_id", f"step_{index}")
+            step_id = step.get("step_id") or step.get("id") or f"step_{index}"
             slug = _slugify(step_id)
             retrieval_plan = build_step_retrieval_plan(step, language, task.nvd_cache)
             step_output_dir = os.path.join(fragments_dir, f"{index:02d}_{slug}")
             os.makedirs(step_output_dir, exist_ok=True)
             _write_json(os.path.join(step_output_dir, "retrieval_plan.json"), retrieval_plan)
-            _write_json(os.path.join(step_output_dir, "step.json"), step)
+            # Normalize step identifier for downstream prompts and patch targeting.
+            step_for_prompt = dict(step)
+            step_for_prompt.setdefault("step_id", step_id)
+            _write_json(os.path.join(step_output_dir, "step.json"), step_for_prompt)
+
+            fragment_refs.append(
+                {
+                    "index": index,
+                    "step_id": step_id,
+                    "dir": step_output_dir,
+                    "fragment_json_path": os.path.join(step_output_dir, "fragment.json"),
+                    "qlfrag_path": os.path.join(step_output_dir, "fragment.qlfrag"),
+                }
+            )
 
             fragment_path = os.path.join(step_output_dir, "fragment.json")
             should_rerun = (
@@ -1169,24 +1744,77 @@ class VulnSynthGenAgent:
                     fragment = _read_json(fragment_path)
                     if not isinstance(fragment, dict):
                         raise ValueError("fragment.json is not a dict")
+
+                    # Guardrail: avoid reusing a Coco trace (or any malformed fragment)
+                    # as if it were a valid step fragment.
+                    required = {
+                        "step_id",
+                        "fragment_type",
+                        "summary",
+                        "required_imports",
+                        "defines_symbols",
+                        "depends_on_symbols",
+                        "codeql_fragment",
+                        "notes",
+                    }
+                    if any(k not in fragment for k in required):
+                        raise ValueError("fragment.json is missing required contract keys")
+                    if not str(fragment.get("codeql_fragment", "") or "").strip():
+                        raise ValueError("fragment.json has empty codeql_fragment")
+
+                    forbidden = _forbidden_codeql_symbol(language, str(fragment.get("codeql_fragment", "") or ""))
+                    if forbidden:
+                        raise ValueError(f"fragment.json contains forbidden CodeQL symbol: {forbidden}")
                 except Exception:
                     should_rerun = True
 
             if should_rerun:
-                prompt = vulnsynth_prompts.build_fragment_prompt(
+                loop_feedback = ""
+                try:
+                    fb = fragment_bundle.get("feedback")
+                    if fb is not None:
+                        loop_feedback = json.dumps(fb, indent=2, ensure_ascii=False)
+                except Exception:
+                    loop_feedback = ""
+                base_prompt = vulnsynth_prompts.build_fragment_prompt(
                     task,
                     l1_json,
                     l2_json,
                     l3_json,
-                    json.dumps(step, indent=2, ensure_ascii=False),
+                    json.dumps(step_for_prompt, indent=2, ensure_ascii=False),
                     json.dumps(retrieval_plan, indent=2, ensure_ascii=False),
                     language,
+                    loop_feedback_json=loop_feedback,
                 )
-                fragment = await self._run_stage(
-                    f"gen_step_{index:02d}_{slug}",
-                    prompt,
-                    step_output_dir,
-                )
+
+                async def _gen_once(extra_guidance: str = "") -> Dict[str, Any]:
+                    p = base_prompt
+                    if extra_guidance.strip():
+                        p = (
+                            p
+                            + "\n\n# EXTRA GENERATION GUARDRAIL\n"
+                            + extra_guidance.strip()
+                            + "\n"
+                        )
+                    return await self._run_stage(
+                        f"gen_step_{index:02d}_{slug}",
+                        p,
+                        step_output_dir,
+                    )
+
+                fragment = await _gen_once()
+
+                # Lightweight semantic guardrail: if the generated fragment contains
+                # a known-invalid symbol for this language, regenerate once with an
+                # explicit correction.
+                forbidden = _forbidden_codeql_symbol(language, str(fragment.get("codeql_fragment", "") or ""))
+                if forbidden:
+                    fragment = await _gen_once(
+                        f"- The generated fragment used `{forbidden}`, which is not available in this environment.\n"
+                        f"- For Java, use `MethodCall` for method invocation expressions (not `{forbidden}`).\n"
+                        "- Re-run retrieval using ONLY the collections listed in the Retrieval Plan allowlist, then regenerate the fragment."
+                    )
+
                 _write_json(fragment_path, fragment)
                 fragment_code = str(fragment.get("codeql_fragment", "")).rstrip() + "\n"
                 _write_text(os.path.join(step_output_dir, "fragment.qlfrag"), fragment_code)
@@ -1198,15 +1826,69 @@ class VulnSynthGenAgent:
 
         final_query_json_path = os.path.join(output_dir, "final_query.json")
         if rerun_composer:
+            loop_feedback = ""
+            try:
+                fb = fragment_bundle.get("feedback")
+                if fb is not None:
+                    loop_feedback = json.dumps(fb, indent=2, ensure_ascii=False)
+            except Exception:
+                loop_feedback = ""
+            fragment_index_json = json.dumps(
+                {
+                    "fragment_bundle_path": fragment_bundle_path,
+                    "fragments_dir": fragments_dir,
+                    "fragment_refs": fragment_refs,
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
             compose_prompt = vulnsynth_prompts.build_query_composition_prompt(
                 task,
                 l1_json,
                 l2_json,
                 l3_json,
-                json.dumps(fragment_bundle, indent=2, ensure_ascii=False),
+                fragment_index_json,
                 language,
+                loop_feedback_json=loop_feedback,
             )
             final_query = await self._run_stage("compose_final_query", compose_prompt, output_dir)
+
+            # If the composer introduces a known-invalid symbol for this language,
+            # retry once with an explicit correction note.
+            try:
+                qc0 = str((final_query or {}).get("query_code", "") or "")
+            except Exception:
+                qc0 = ""
+            forbidden = _forbidden_codeql_symbol(language, qc0)
+            if forbidden:
+                self.logger.warning(
+                    f"compose_final_query used forbidden CodeQL symbol {forbidden}; retrying once with stricter guidance"
+                )
+                final_query = await self._run_stage(
+                    "compose_final_query",
+                    compose_prompt
+                    + "\n\n# COMPOSITION GUARDRAIL\n"
+                    + f"- The composed query used `{forbidden}`, which is not available in this environment.\n"
+                    + "- For Java, use `MethodCall` for method invocation expressions (not `MethodAccess`).\n",
+                    output_dir,
+                )
+            # Guardrail: if composition fails (timeout/trace output), avoid clobbering a
+            # previously good query with an empty one.
+            try:
+                qc = str((final_query or {}).get("query_code", "") or "").strip()
+            except Exception:
+                qc = ""
+            if not qc and os.path.exists(final_query_json_path):
+                try:
+                    prev = _read_json(final_query_json_path)
+                    prev_qc = str((prev or {}).get("query_code", "") or "").strip() if isinstance(prev, dict) else ""
+                    if prev_qc:
+                        self.logger.warning(
+                            "compose_final_query produced empty query_code; preserving previous final_query.json"
+                        )
+                        final_query = prev
+                except Exception:
+                    pass
             _write_json(final_query_json_path, final_query)
         else:
             final_query = _read_json(final_query_json_path) if os.path.exists(final_query_json_path) else {}
@@ -1265,7 +1947,23 @@ class VulnSynthValidAgent:
         if not str(query_file_name).endswith(".ql"):
             query_file_name = f"{query_file_name}.ql"
         query_path = os.path.join(gen_dir, query_file_name)
-        if not os.path.exists(query_path):
+
+        # Keep `final_query.json` (source of truth) and the materialized `.ql` file in sync.
+        # This matters when the feedback loop applies patches directly to `final_query.json`.
+        try:
+            query_code = str((final_query or {}).get("query_code", "") or "")
+        except Exception:
+            query_code = ""
+        query_code = query_code.rstrip() + "\n" if query_code else ""
+        if query_code.strip():
+            # Always (re)materialize the `.ql` file from `final_query.json`.
+            try:
+                existing = _read_text(query_path) if os.path.exists(query_path) else ""
+                if existing.strip() != query_code.strip():
+                    _write_text(query_path, query_code)
+            except Exception:
+                _write_text(query_path, query_code)
+        elif not os.path.exists(query_path):
             # Fallback: if the file name differs, pick the first .ql in gen_dir.
             ql_files = [p for p in os.listdir(gen_dir) if p.endswith(".ql")]
             if not ql_files:
@@ -1626,7 +2324,155 @@ class FailureAnalyzer:
 
 
 class UpdateEngine:
-    """Applies explicit update actions to L1/L2/L3 (MVP: mainly updates L3 retrieval hints)."""
+    """Applies policy-constrained patches to IR artifacts.
+
+    This follows AGENT_DIAGNOSIS_POLICY_REPAIR-cn.md:
+    - Diagnoser proposes minimal patches
+    - UpdateEngine validates patches against patch_policy.yaml
+    - UpdateEngine applies only whitelisted (file, op, path)
+    """
+
+    def __init__(self, policy_path: Optional[str] = None):
+        self.policy_path = policy_path or os.path.join(VULNSYNTH_ROOT_DIR, "patch_policy.yaml")
+        self._policy_cache: Optional[Dict[str, Any]] = None
+
+    def _policy(self) -> Dict[str, Any]:
+        if self._policy_cache is None:
+            self._policy_cache = _read_patch_policy_yaml(self.policy_path)
+        return self._policy_cache
+
+    def validate_patches(self, patches: List[dict]) -> Dict[str, Any]:
+        policy = self._policy() or {}
+        allowed_ops = set((policy.get("allowed_ops") or []))
+        safety = policy.get("safety") or {}
+        require_reason = bool(safety.get("require_reason", False))
+        max_patches = int(safety.get("max_patches_per_iteration", 20) or 20)
+        allowed_files = (policy.get("files") or {})
+
+        ok: List[dict] = []
+        rejected: List[dict] = []
+
+        for p in (patches or [])[:max_patches]:
+            if not isinstance(p, dict):
+                rejected.append({"patch": p, "reason": "patch is not an object"})
+                continue
+            op = str(p.get("op") or "").strip()
+            file_key = str(p.get("file") or "").strip()
+            path = str(p.get("path") or "").strip()
+            reason = str(p.get("reason") or "").strip()
+
+            if op not in allowed_ops:
+                rejected.append({"patch": p, "reason": f"op not allowed: {op}"})
+                continue
+            if file_key not in allowed_files:
+                rejected.append({"patch": p, "reason": f"file not allowed: {file_key}"})
+                continue
+            if require_reason and not reason:
+                rejected.append({"patch": p, "reason": "missing reason"})
+                continue
+
+            allowed_paths = (allowed_files.get(file_key) or {}).get("allowed_paths") or []
+            if not any(_path_matches_pattern(str(ap), path) for ap in allowed_paths):
+                rejected.append({"patch": p, "reason": f"path not allowed: {path}"})
+                continue
+
+            if op in ("append", "replace", "merge") and ("value" not in p):
+                rejected.append({"patch": p, "reason": f"missing value for op {op}"})
+                continue
+
+            ok.append(p)
+
+        return {"accepted": ok, "rejected": rejected, "max_patches": max_patches}
+
+    def apply_patches(self, *, ir_case_dir: str, patches: List[dict]) -> Dict[str, Any]:
+        """Apply accepted patches to IR artifacts on disk."""
+
+        l1_path, l2_path, l3_path = _load_case_ir_paths(ir_case_dir)
+        gen_dir = os.path.join(ir_case_dir, "generated_query")
+        bundle_path = os.path.join(gen_dir, "fragment_bundle.json")
+        final_query_path = os.path.join(gen_dir, "final_query.json")
+
+        l1 = _read_json(l1_path) if os.path.exists(l1_path) else {}
+        l2 = _read_json(l2_path) if os.path.exists(l2_path) else {}
+        l3 = _read_json(l3_path) if os.path.exists(l3_path) else {}
+        bundle = _read_json(bundle_path) if os.path.exists(bundle_path) else {}
+        finalq = _read_json(final_query_path) if os.path.exists(final_query_path) else {}
+
+        file_map = {
+            "L1_fact.json": (l1_path, l1, True),
+            "L2_schema_ir.json": (l2_path, l2, True),
+            "L3_logic_plan.json": (l3_path, l3, True),
+            "fragment_bundle.json": (bundle_path, bundle, os.path.exists(bundle_path)),
+            "final_query.json": (final_query_path, finalq, os.path.exists(final_query_path)),
+        }
+
+        applied: List[dict] = []
+        errors: List[dict] = []
+
+        for p in patches or []:
+            try:
+                file_key = str(p.get("file") or "").strip()
+                op = str(p.get("op") or "").strip()
+                path = str(p.get("path") or "").strip()
+                pre = p.get("precondition")
+                val = p.get("value")
+
+                target_path, doc, exists_ok = file_map[file_key]
+                if not exists_ok and file_key in ("fragment_bundle.json", "final_query.json"):
+                    # Do not create new optional files.
+                    raise FileNotFoundError(f"Optional artifact not found: {target_path}")
+
+                if isinstance(pre, dict) and pre.get("path"):
+                    pre_path = str(pre.get("path") or "").strip()
+                    try:
+                        cur_val = _get_at_pointer(doc, pre_path)
+                    except Exception:
+                        cur_val = None
+                    if "equals" in pre and cur_val != pre.get("equals"):
+                        raise ValueError("precondition failed: equals")
+                    if "in" in pre:
+                        allowed = pre.get("in")
+                        if isinstance(allowed, list) and cur_val not in allowed:
+                            raise ValueError("precondition failed: in")
+
+                if op == "append":
+                    container = _get_at_pointer(doc, path)
+                    if not isinstance(container, list):
+                        raise ValueError(f"append target is not a list: {path}")
+                    container.append(val)
+                elif op == "merge":
+                    existing = _get_at_pointer(doc, path)
+                    merged = _merge_value(existing, val)
+                    _set_at_pointer(doc, path, merged)
+                elif op == "replace":
+                    _set_at_pointer(doc, path, val, replace_with_many=isinstance(val, list))
+                elif op == "remove":
+                    _remove_at_pointer(doc, path)
+                else:
+                    raise ValueError(f"unknown op: {op}")
+
+                applied.append({"patch": p, "file_path": target_path})
+            except Exception as e:
+                errors.append({"patch": p, "error": f"{type(e).__name__}: {e}"})
+
+        # Write back updated artifacts.
+        for _, (p, doc, exists_ok) in file_map.items():
+            if not exists_ok:
+                continue
+            try:
+                _write_json(p, doc)
+            except Exception:
+                pass
+
+        return {
+            "l1": l1,
+            "l2": l2,
+            "l3": l3,
+            "bundle": bundle,
+            "final_query": finalq,
+            "applied": applied,
+            "errors": errors,
+        }
 
     def derive_actions(
         self,
@@ -1637,242 +2483,57 @@ class UpdateEngine:
         l3: dict,
         failure_repeat_count: int = 1,
     ) -> dict:
-        actions: List[dict] = []
-        failures = failure_report.get("classified_failures", [])
-        iteration = int(failure_report.get("iteration", 0) or 0)
-        case_id = str(failure_report.get("case_id") or "")
-        primary = failure_report.get("primary_failure_type")
+        """Deprecated legacy hook (kept for backward compatibility).
 
-        def _act(action_id: str, target_layer: str, target_object_id: str, action_type: str, reason: str, patch: dict | None = None):
-            obj = {
-                "action_id": action_id,
-                "target_layer": target_layer,
-                "target_object_id": target_object_id,
-                "action_type": action_type,
-                "reason": reason,
-            }
-            if patch is not None:
-                obj["patch"] = patch
-            actions.append(obj)
+        The policy-constrained repair flow uses DiagnoserAgent -> proposed_patches.
+        """
 
-        # MVP+ action set aligned with design doc section 15/18.
-        for idx, f in enumerate(failures, start=1):
-            ft = f.get("failure_type")
-
-            if ft in ("syntax_error", "fragment_composition_conflict"):
-                _act(
-                    f"act_{idx:03d}",
-                    "Composer",
-                    "compose_final_query",
-                    "recompose_query",
-                    f"{ft}: adjust composer output / de-duplicate definitions",
-                )
-            elif ft == "missing_import":
-                _act(
-                    f"act_{idx:03d}",
-                    "Composer",
-                    "compose_final_query",
-                    "recompose_query",
-                    "missing_import: ensure required imports appear in final query",
-                )
-            elif ft in ("unresolved_codeql_symbol", "retrieval_miss"):
-                _act(
-                    f"act_{idx:03d}",
-                    "L3",
-                    "*",
-                    "augment_retrieval_hints",
-                    f"{ft}: broaden retrieval hints to reduce API hallucination",
-                    patch={
-                        "candidate_classes_add": [
-                            "Expr",
-                            "MethodCall",
-                            "Call",
-                            "FieldAccess",
-                            "VarAccess",
-                            "IfStmt",
-                            "ThrowStmt",
-                            "StringLiteral",
-                        ],
-                        "candidate_predicates_add": [
-                            "hasQualifiedName",
-                            "hasName",
-                            "getMethod",
-                            "getQualifier",
-                            "getArgument",
-                            "getEnclosingCallable",
-                            "getInitializer",
-                        ],
-                    },
-                )
-                _act(
-                    f"act_{idx:03d}_b",
-                    "Fragment",
-                    "*",
-                    "regenerate_fragment",
-                    "Regenerate fragments after L3 retrieval hints update",
-                )
-            elif ft in ("wrong_predicate_arity", "wrong_type_constraint"):
-                _act(
-                    f"act_{idx:03d}",
-                    "Fragment",
-                    "*",
-                    "regenerate_fragment",
-                    f"{ft}: regenerate fragment(s) with corrected CodeQL typing/arity",
-                )
-            elif ft == "empty_result_on_vulnerable":
-                # First: relax by improving L3 guidance; after repeats, escalate to L3 rebuild.
-                _act(
-                    f"act_{idx:03d}",
-                    "L3",
-                    "*",
-                    "revise_step_description",
-                    "empty_result_on_vulnerable: relax constraints; ensure anchor steps exist",
-                )
-                if failure_repeat_count >= 2:
-                    _act(
-                        f"act_{idx:03d}_b",
-                        "L3",
-                        "*",
-                        "split_step",
-                        "Repeated empty results: consider rebuilding/splitting steps",
-                    )
-                _act(
-                    f"act_{idx:03d}_c",
-                    "Composer",
-                    "compose_final_query",
-                    "recompose_query",
-                    "Recompose query after L3 guidance update",
-                )
-            elif ft == "target_miss_on_vulnerable":
-                # Has results but misses target fixed locations -> broaden anchor binding and retrieval hints.
-                _act(
-                    f"act_{idx:03d}",
-                    "L3",
-                    "*",
-                    "augment_retrieval_hints",
-                    "target_miss_on_vulnerable: broaden retrieval for anchor steps and target binding",
-                    patch={
-                        "candidate_classes_add": ["Method", "Callable", "Field", "StringLiteral"],
-                        "candidate_predicates_add": ["getName", "hasQualifiedName", "getDeclaringType"],
-                    },
-                )
-                _act(
-                    f"act_{idx:03d}_b",
-                    "L3",
-                    "*",
-                    "revise_step_description",
-                    "target_miss_on_vulnerable: add explicit target-binding guidance",
-                )
-                if failure_repeat_count >= 2:
-                    _act(
-                        f"act_{idx:03d}_c",
-                        "L2",
-                        "*",
-                        "add_entity",
-                        "Repeated target miss: revisit semantic entities/relations for target anchor",
-                    )
-                _act(
-                    f"act_{idx:03d}_d",
-                    "Fragment",
-                    "*",
-                    "regenerate_fragment",
-                    "Regenerate fragments after target-binding hint update",
-                )
-                _act(
-                    f"act_{idx:03d}_e",
-                    "Composer",
-                    "compose_final_query",
-                    "recompose_query",
-                    "Recompose query after target-binding update",
-                )
-            elif ft == "false_positive_on_fixed":
-                _act(
-                    f"act_{idx:03d}",
-                    "L2",
-                    "*",
-                    "add_guard",
-                    "false_positive_on_fixed: add guard/constraint to exclude fixed behavior",
-                )
-                _act(
-                    f"act_{idx:03d}_b",
-                    "L3",
-                    "*",
-                    "add_step",
-                    "Add exclusion/sanitizer step",
-                )
-            elif ft == "database_analyze_failure":
-                _act(
-                    f"act_{idx:03d}",
-                    "Environment",
-                    "codeql",
-                    "retry_validate",
-                    "database_analyze_failure: retry validate; likely environment issue",
-                )
-
+        _ = (failure_report, l1, l2, l3, failure_repeat_count)
         return {
-            "case_id": case_id,
-            "iteration": iteration,
-            "primary_failure_type": primary,
-            "failure_repeat_count": failure_repeat_count,
-            "actions": actions,
+            "case_id": str(failure_report.get("case_id") or ""),
+            "iteration": int(failure_report.get("iteration", 0) or 0),
+            "primary_failure_type": failure_report.get("primary_failure_type"),
+            "actions": [],
+            "notes": ["derive_actions() is deprecated; use DiagnoserAgent proposed_patches."],
         }
 
-    def apply_actions(self, *, l1: dict, l2: dict, l3: dict, update_actions: dict) -> tuple[dict, dict, dict]:
-        # MVP: modifies L3 retrieval hints / expected output and attaches feedback history.
-        actions = update_actions.get("actions", [])
-        l1_u = json.loads(json.dumps(l1))
-        l2_u = json.loads(json.dumps(l2))
-        l3_u = json.loads(json.dumps(l3))
-
-        fb_entry = {
-            "iteration": int(update_actions.get("iteration", 0) or 0),
-            "primary_failure_type": update_actions.get("primary_failure_type"),
-            "actions": [a.get("action_type") for a in actions],
-        }
-        for obj in (l1_u, l2_u, l3_u):
-            hist = obj.setdefault("feedback_history", [])
-            if isinstance(hist, list):
-                hist.append(fb_entry)
-
-        steps = l3_u.get("steps", [])
-
-        def _ensure_list(container: dict, key: str) -> list:
-            v = container.get(key)
-            if isinstance(v, list):
-                return v
-            container[key] = []
-            return container[key]
-
-        for act in actions:
-            if act.get("target_layer") == "L3" and act.get("action_type") == "augment_retrieval_hints":
-                patch = act.get("patch", {}) or {}
-                add_classes = patch.get("candidate_classes_add", [])
-                add_preds = patch.get("candidate_predicates_add", [])
-                for step in steps:
-                    hints = step.setdefault("retrieval_hints", {})
-                    cls_list = _ensure_list(hints, "candidate_classes")
-                    pred_list = _ensure_list(hints, "candidate_predicates")
-                    for c in add_classes:
-                        if c not in cls_list:
-                            cls_list.append(c)
-                    for p in add_preds:
-                        if p not in pred_list:
-                            pred_list.append(p)
-                    notes = step.setdefault("notes", [])
-                    if isinstance(notes, list):
-                        notes.append("FeedbackLoop: broadened retrieval_hints due to unresolved CodeQL symbol")
-            elif act.get("target_layer") == "L3" and act.get("action_type") == "revise_step_description":
-                for step in steps:
-                    exp = step.get("expected_output")
-                    extra = "FeedbackLoop: avoid over-constraining; prefer binding anchors then refining"
-                    if isinstance(exp, str) and extra not in exp:
-                        step["expected_output"] = exp + "\n" + extra
-                    elif not exp:
-                        step["expected_output"] = extra
-        return l1_u, l2_u, l3_u
+    # NOTE: legacy heuristic update logic removed in favor of policy-constrained patches.
 
 
 class RegenPlanner:
+    @staticmethod
+    def regen_scope_from_patched_files(files: List[str]) -> Dict[str, Any]:
+        """Map modified artifact files to regeneration scope (doc section 7)."""
+
+        files_set = set(str(f) for f in (files or []))
+        scope: Dict[str, Any] = {
+            "mode": "rerun_composer_only",
+            "rerun_l1": False,
+            "rerun_l2": False,
+            "rerun_l3": False,
+            "rerun_all_fragments": False,
+            "rerun_steps": [],
+            "rerun_composer": True,
+            "reuse_existing_fragments": True,
+        }
+
+        if "L1_fact.json" in files_set:
+            scope.update({"mode": "rerun_l1_l2_l3", "rerun_l1": True, "rerun_l2": True, "rerun_l3": True, "rerun_all_fragments": True, "reuse_existing_fragments": False})
+        elif "L2_schema_ir.json" in files_set:
+            scope.update({"mode": "rerun_l2_l3", "rerun_l2": True, "rerun_l3": True, "rerun_all_fragments": True, "reuse_existing_fragments": False})
+        elif "L3_logic_plan.json" in files_set:
+            scope.update({"mode": "rerun_l3", "rerun_l3": True, "rerun_all_fragments": True, "reuse_existing_fragments": False})
+        elif "fragment_bundle.json" in files_set:
+            scope.update({"mode": "rerun_fragments", "rerun_all_fragments": False, "reuse_existing_fragments": True})
+        elif "final_query.json" in files_set:
+            # The update engine has already patched `generated_query/final_query.json`.
+            # Do NOT rerun the composer (it would overwrite the patched content).
+            # Instead, rerun gen in "materialize" mode so we rewrite the `.ql` file
+            # from the patched `final_query.json`, then proceed to validation.
+            scope.update({"mode": "use_patched_final_query", "rerun_composer": False, "reuse_existing_fragments": True})
+
+        return scope
+
     def build_regen_plan(
         self,
         *,
@@ -2001,6 +2662,105 @@ class FeedbackLoopController:
         self.updater = UpdateEngine()
         self.planner = RegenPlanner()
 
+    @staticmethod
+    def _fallback_proposed_patches(
+        *,
+        cve_id: str,
+        iteration: int,
+        primary_failure_type: str,
+        ir_case_dir: str,
+        failure_report: dict,
+    ) -> List[dict]:
+        """Fallback patch generator when the Diagnoser Agent fails or times out.
+
+        This keeps the repair loop progressing by writing guidance into
+        generated_query/fragment_bundle.json (feedback + regen_steps), which
+        the next generation pass consumes.
+        """
+
+        gen_dir = os.path.join(ir_case_dir, "generated_query")
+        bundle_path = os.path.join(gen_dir, "fragment_bundle.json")
+        bundle = _read_json(bundle_path) if os.path.exists(bundle_path) else {}
+        existing_hist = []
+        if isinstance(bundle, dict) and isinstance(bundle.get("feedback_history"), list):
+            existing_hist = list(bundle.get("feedback_history") or [])
+
+        now_utc = datetime.utcnow().isoformat() + "Z"
+        entry = {
+            "iteration": int(iteration),
+            "timestamp_utc": now_utc,
+            "primary_failure_type": str(primary_failure_type or ""),
+            "summary": "fallback guidance (diagnoser unavailable)",
+        }
+
+        guidance: List[str] = []
+        regen_steps: List[str] = []
+
+        ft = str(primary_failure_type or "")
+        if ft in ("syntax_error", "fragment_composition_conflict", "missing_import"):
+            guidance = [
+                "Fix CodeQL compilation issues caused by composition.",
+                "Do not emit predicate/function signatures without bodies (no `predicate p(T x);`).",
+                "Ensure helper predicate/class names are unique; never redefine common names like getMethod/getEnclosingCallable.",
+                "Do not invent CodeQL APIs or higher-order predicates; verify symbols via retrieval when unsure.",
+            ]
+            regen_steps = []
+        elif ft in ("empty_result_on_vulnerable", "target_miss_on_vulnerable"):
+            guidance = [
+                "Query compiles but returns 0 results on the vulnerable DB.",
+                "Broaden matching: avoid overly strict constraints (exact string/fully-qualified name) unless validated.",
+                "Prefer detecting the vulnerable pattern structurally (dataflow/taint) before narrowing with names.",
+                "If using resource/classpath checks, allow variations (leading '/', relative names, different loaders).",
+                "Re-check source/sink definitions and intermediate guards; ensure all variables are bound.",
+            ]
+            # Force regenerating all fragments so step-level prompts consume the guidance.
+            regen_steps = ["*"]
+        else:
+            guidance = [
+                "Repair iteration failed but diagnoser was unavailable.",
+                "Simplify the query and re-check assumptions; prefer a compilable minimal query that matches the vulnerable DB.",
+            ]
+            regen_steps = ["*"]
+
+        feedback_obj = {
+            "case_id": cve_id,
+            "iteration": int(iteration),
+            "primary_failure_type": ft,
+            "evidence": {
+                "compile": (failure_report.get("compile") or {}),
+                "execution": (failure_report.get("execution") or {}),
+            },
+            "guidance": guidance,
+        }
+
+        patches: List[dict] = [
+            {
+                "file": "fragment_bundle.json",
+                "op": "replace",
+                "path": "/feedback",
+                "value": feedback_obj,
+                "reason": "Fallback: inject actionable feedback guidance into fragment_bundle.json",
+            },
+            {
+                "file": "fragment_bundle.json",
+                "op": "replace",
+                "path": "/feedback_history",
+                "value": existing_hist + [entry],
+                "reason": "Fallback: append a feedback_history entry to preserve iteration context",
+            },
+        ]
+        if regen_steps:
+            patches.append(
+                {
+                    "file": "fragment_bundle.json",
+                    "op": "replace",
+                    "path": "/regen_steps",
+                    "value": regen_steps,
+                    "reason": "Fallback: force rerun of selected steps so guidance is applied",
+                }
+            )
+        return patches
+
     def _feedback_dir(self, cve_id: str) -> str:
         return os.path.join(self.working_dir, self.ir_root, cve_id, "feedback_loop")
 
@@ -2127,9 +2887,17 @@ class FeedbackLoopController:
                 except Exception:
                     pass
 
-        # Base session id shared by multiple Coco sessions within the loop.
-        # Individual stages will derive role-specific sessions from this base.
+        # Base session id shared by multiple sessions within the loop.
+        # (Coco derives role-specific sessions from this base.)
         os.environ.setdefault("COCO_SESSION_ID_BASE", f"vulnsynth-loop-{cve_id}")
+        base_session = str(os.environ.get("COCO_SESSION_ID_BASE", "")).strip()
+        backend_session_ids: List[str] = []
+        if base_session:
+            backend_session_ids = [
+                f"{base_session}::plan",
+                f"{base_session}::gen",
+                f"{base_session}::compose",
+            ]
 
         # Cleanup any orphaned MCP/LSP processes left by previous runs.
         _cleanup_orphan_mcp_processes()
@@ -2151,6 +2919,15 @@ class FeedbackLoopController:
         )
         valid_agent = VulnSynthValidAgent(working_dir=self.working_dir)
 
+        # Diagnoser agent for policy-constrained repair.
+        diagnoser_agent = VulnSynthGenAgent(
+            working_dir=self.working_dir,
+            agent=self.agent,
+            model=self.model,
+            ablation_mode=self.ablation_mode,
+            codex_use_local_config=True,
+        )
+
         # Cleanup control: best-effort cleanup for orphaned MCP/LSP processes.
         os.environ.setdefault("VULNSYNTH_CLEANUP_ORPHAN_MCP_ON_EXIT", "1")
 
@@ -2159,23 +2936,416 @@ class FeedbackLoopController:
                 return
             _cleanup_orphan_mcp_processes()
 
-        # Ensure plan exists.
-        l1_path, l2_path, l3_path = _load_case_ir_paths(ir_case_dir)
-        if not (os.path.exists(l1_path) and os.path.exists(l2_path) and os.path.exists(l3_path)):
-            await plan_agent.analyze(cve_id, output_root=self.ir_root)
-        _trace("plan_ok", "GEN_QUERY", {"ir_case_dir": ir_case_dir})
+        def _maybe_cleanup_backend_sessions() -> None:
+            if str(os.environ.get("VULNSYNTH_CLEANUP_AGENT_SESSIONS_ON_EXIT", "1")).strip() in ("0", "false", "False"):
+                return
+            if not backend_session_ids:
+                return
+            try:
+                # Cleanup is backend-specific (Coco persists sessions on disk; other backends may no-op).
+                plan_agent.backend.cleanup_sessions(backend_session_ids)
+            except Exception:
+                pass
 
-        # Ensure gen exists.
-        gen_dir = os.path.join(ir_case_dir, self.generation_subdir)
-        final_query_json_path = os.path.join(gen_dir, "final_query.json")
-        if not os.path.exists(final_query_json_path):
-            await gen_agent.generate(cve_id, ir_root=self.ir_root, generation_subdir=self.generation_subdir)
-        _trace("gen_ok", "VALIDATE_COMPILE", {"generated_query_dir": gen_dir})
+        try:
+            # Ensure plan exists.
+            l1_path, l2_path, l3_path = _load_case_ir_paths(ir_case_dir)
+            if not (os.path.exists(l1_path) and os.path.exists(l2_path) and os.path.exists(l3_path)):
+                await plan_agent.analyze(cve_id, output_root=self.ir_root)
+            _trace("plan_ok", "GEN_QUERY", {"ir_case_dir": ir_case_dir})
 
-        last_summary_path = ""
+            # Ensure gen exists.
+            gen_dir = os.path.join(ir_case_dir, self.generation_subdir)
+            final_query_json_path = os.path.join(gen_dir, "final_query.json")
+            if not os.path.exists(final_query_json_path):
+                await gen_agent.generate(cve_id, ir_root=self.ir_root, generation_subdir=self.generation_subdir)
+            _trace("gen_ok", "VALIDATE_COMPILE", {"generated_query_dir": gen_dir})
 
-        if start_iter > self.max_iters:
-            _trace("budget_exhausted", "TERMINAL_FAIL", {"reason": "resume_start_iter_exceeds_max_iters"})
+            last_summary_path = ""
+
+            if start_iter > self.max_iters:
+                _trace("budget_exhausted", "TERMINAL_FAIL", {"reason": "resume_start_iter_exceeds_max_iters"})
+                final_fail = {
+                    "status": "failed",
+                    "iterations": self.max_iters,
+                    "summary_path": last_summary_path,
+                    "primary_failure_type": last_primary_failure,
+                    "repeat_count": repeat_count,
+                }
+                run_meta["elapsed_seconds_total"] = float(run_meta.get("elapsed_seconds_total", 0.0) or 0.0) + (time.time() - invocation_start)
+                run_meta["last_updated_at_utc"] = datetime.utcnow().isoformat() + "Z"
+                _write_json(meta_path, run_meta)
+                _write_json(os.path.join(feedback_dir, "final_failure_summary.json"), final_fail)
+                final_fail["runtime_seconds_total"] = run_meta.get("elapsed_seconds_total")
+                return final_fail
+
+            for iteration in range(start_iter, self.max_iters + 1):
+                iter_dir = self._iter_dir(cve_id, iteration)
+                _ensure_dir(iter_dir)
+
+                # VALIDATE_COMPILE + VALIDATE_EXEC_EVAL (combined)
+                _trace("validate_start", "VALIDATE_COMPILE", {"iter_dir": iter_dir})
+
+                valid_result = await valid_agent.validate(
+                    cve_id,
+                    ir_root=self.ir_root,
+                    generation_subdir=self.generation_subdir,
+                    codeql_path=self.codeql_path,
+                    output_dir=iter_dir,
+                    artifact_prefix=f"iter_{iteration:02d}",
+                )
+                last_summary_path = valid_result["summary_path"]
+                validation_summary = _read_json(last_summary_path)
+                _write_json(os.path.join(iter_dir, "validation_summary.json"), validation_summary)
+
+                # Iteration-level housekeeping: reap orphaned MCP/LSP processes that can
+                # accumulate across iterations (PPID=1 only).
+                _maybe_cleanup_orphans()
+
+                if not validation_summary.get("compile", {}).get("success"):
+                    _trace("compile_fail", "ANALYZE_FAILURE", {"summary_path": last_summary_path})
+                else:
+                    _trace("compile_ok", "VALIDATE_EXEC_EVAL", {"summary_path": last_summary_path})
+
+                if self._success(validation_summary):
+                    _trace("eval_success", "TERMINAL_SUCCESS", {"summary_path": last_summary_path})
+                    _write_json(
+                        os.path.join(iter_dir, "result.json"),
+                        {"status": "success", "summary_path": last_summary_path},
+                    )
+                    run_meta["elapsed_seconds_total"] = float(run_meta.get("elapsed_seconds_total", 0.0) or 0.0) + (
+                        time.time() - invocation_start
+                    )
+                    run_meta["last_updated_at_utc"] = datetime.utcnow().isoformat() + "Z"
+                    _write_json(meta_path, run_meta)
+                    return {
+                        "status": "success",
+                        "iterations": iteration,
+                        "summary_path": last_summary_path,
+                        "runtime_seconds_total": run_meta.get("elapsed_seconds_total"),
+                    }
+
+                # Failure path: analyze -> diagnose -> policy-constrained repair -> regen plan
+                _trace("eval_fail", "ANALYZE_FAILURE", {"summary_path": last_summary_path})
+                l1, l2, l3 = _load_case_ir(ir_case_dir)
+                failure_report = self.analyzer.analyze(
+                    case_id=cve_id, iteration=iteration, validation_summary=validation_summary
+                )
+                _write_json(os.path.join(iter_dir, "failure_report.json"), failure_report)
+
+                primary = failure_report.get("primary_failure_type")
+
+                # Regen fallback trigger T2: soft reset (from L1) didn't fix -> full reset.
+                force_full_reset = bool(last_regen_mode == "fallback_replan_from_l1")
+
+                if primary and primary == last_primary_failure:
+                    repeat_count += 1
+                else:
+                    last_primary_failure = primary
+                    repeat_count = 1
+                _trace(
+                    "analyze_ok",
+                    "DIAGNOSE_FAILURE",
+                    {"primary_failure_type": primary, "repeat_count": repeat_count},
+                )
+
+                # Diagnoser Agent produces structured diagnosis + proposed_patches.
+                diagnosis_report: Dict[str, Any]
+                try:
+                    cve_dir, repo_path, diff_path = discover_cve_paths(cve_id)
+                    task = VulnSynthTask(
+                        cve_id=cve_id,
+                        cve_dir=cve_dir,
+                        repo_path=repo_path,
+                        diff_path=diff_path,
+                        fix_commit_diff=_preprocess_diff(_read_text(diff_path)),
+                        cve_description=_maybe_load_cve_description(cve_id),
+                    )
+                    policy_path = os.path.join(VULNSYNTH_ROOT_DIR, "patch_policy.yaml")
+                    # Keep the diagnoser prompt compact to avoid OS ARG_MAX limits.
+                    # The diagnoser should read full artifacts from disk.
+                    compile_tail = _tail(str((validation_summary.get("compile") or {}).get("stderr_tail") or ""), max_lines=20)
+                    failure_tail = _tail(str(failure_report.get("compile", {}).get("stderr_summary") or ""), max_lines=20)
+                    validation_snippet = json.dumps(
+                        {
+                            "compile_success": bool((validation_summary.get("compile") or {}).get("success")),
+                            "compile_stderr_tail": compile_tail,
+                            "query_path": str(validation_summary.get("query_path") or ""),
+                        },
+                        indent=2,
+                        ensure_ascii=False,
+                    )
+                    failure_snippet = json.dumps(
+                        {
+                            "primary_failure_type": failure_report.get("primary_failure_type"),
+                            "compile_stderr_summary_tail": failure_tail,
+                        },
+                        indent=2,
+                        ensure_ascii=False,
+                    )
+                    prompt = vulnsynth_prompts.build_diagnosis_prompt(
+                        task,
+                        iteration=iteration,
+                        validation_summary_path=os.path.join(iter_dir, "validation_summary.json"),
+                        failure_report_path=os.path.join(iter_dir, "failure_report.json"),
+                        patch_policy_path=policy_path,
+                        validation_summary_snippet=validation_snippet,
+                        failure_report_snippet=failure_snippet,
+                    )
+                    diag_dir = os.path.join(iter_dir, "diagnosis")
+                    _ensure_dir(diag_dir)
+                    # Prevent a stuck diagnoser from blocking the feedback loop.
+                    try:
+                        diagnosis_report = await asyncio.wait_for(
+                            diagnoser_agent._run_stage(
+                                "diagnose",
+                                prompt,
+                                diag_dir,
+                            ),
+                            timeout=float(os.environ.get("VULNSYNTH_DIAGNOSE_TIMEOUT_SEC", "240") or 240.0),
+                        )
+                    except asyncio.TimeoutError:
+                        diagnosis_report = {
+                            "case_id": cve_id,
+                            "iteration": iteration,
+                            "primary_failure_type": primary or "unknown_failure",
+                            "confidence": 0.2,
+                            "evidence": {"error": "diagnoser_timeout"},
+                            "suspected_layers": ["diagnoser"],
+                            "proposed_patches": self._fallback_proposed_patches(
+                                cve_id=cve_id,
+                                iteration=iteration,
+                                primary_failure_type=str(primary or "unknown_failure"),
+                                ir_case_dir=ir_case_dir,
+                                failure_report=failure_report,
+                            ),
+                        }
+                    if not isinstance(diagnosis_report, dict):
+                        diagnosis_report = {"raw": diagnosis_report}
+                except Exception as e:
+                    diagnosis_report = {
+                        "case_id": cve_id,
+                        "iteration": iteration,
+                        "primary_failure_type": primary or "unknown_failure",
+                        "confidence": 0.2,
+                        "evidence": {"error": f"diagnoser_failed: {type(e).__name__}: {e}"},
+                        "suspected_layers": ["diagnoser"],
+                        "proposed_patches": self._fallback_proposed_patches(
+                            cve_id=cve_id,
+                            iteration=iteration,
+                            primary_failure_type=str(primary or "unknown_failure"),
+                            ir_case_dir=ir_case_dir,
+                            failure_report=failure_report,
+                        ),
+                    }
+
+                _write_json(os.path.join(iter_dir, "diagnosis_report.json"), diagnosis_report)
+                _trace("diagnose_ok", "APPLY_UPDATE", {"proposed_patches": len(diagnosis_report.get("proposed_patches") or [])})
+
+                proposed = diagnosis_report.get("proposed_patches")
+                proposed_list = proposed if isinstance(proposed, list) else []
+                policy_check = self.updater.validate_patches(proposed_list)
+                accepted = policy_check.get("accepted") or []
+                rejected = policy_check.get("rejected") or []
+
+                _write_json(
+                    os.path.join(iter_dir, "update_actions.json"),
+                    {
+                        "case_id": cve_id,
+                        "iteration": iteration,
+                        "patches": accepted,
+                        "rejected": rejected,
+                    },
+                )
+
+                applied_result = self.updater.apply_patches(ir_case_dir=ir_case_dir, patches=accepted)
+                _write_json(os.path.join(iter_dir, "updated_l1.json"), applied_result.get("l1") or {})
+                _write_json(os.path.join(iter_dir, "updated_l2.json"), applied_result.get("l2") or {})
+                _write_json(os.path.join(iter_dir, "updated_l3.json"), applied_result.get("l3") or {})
+
+                # Use actually-applied patches when deciding regen scope.
+                applied_patches = applied_result.get("applied") or []
+                patched_files = []
+                for ap in applied_patches:
+                    if not isinstance(ap, dict):
+                        continue
+                    p = ap.get("patch")
+                    if isinstance(p, dict):
+                        patched_files.append(str(p.get("file") or "").strip())
+                regen_scope = RegenPlanner.regen_scope_from_patched_files(patched_files)
+
+                # If the diagnoser patched fragment_bundle.json:/regen_steps, honor it by mapping
+                # to the actual generation parameter rerun_steps.
+                bundle = applied_result.get("bundle")
+                if isinstance(bundle, dict):
+                    regen_steps = bundle.get("regen_steps")
+                    if isinstance(regen_steps, list) and all(isinstance(s, str) and s.strip() for s in regen_steps):
+                        regen_scope["rerun_steps"] = [str(s).strip() for s in regen_steps]
+                        regen_scope["mode"] = "rerun_fragments"
+                        regen_scope["rerun_all_fragments"] = False
+                        regen_scope["rerun_composer"] = True
+                        regen_scope["reuse_existing_fragments"] = True
+                regen_plan = {
+                    "case_id": cve_id,
+                    "iteration": iteration,
+                    "primary_failure_type": primary,
+                    "failure_repeat_count": repeat_count,
+                    "rerun_scope": regen_scope,
+                    "reason": "policy-constrained repair -> regen scope mapping",
+                }
+
+                # Fallback trigger T1: 2 consecutive unknown failures -> fallback_replan_from_l1.
+                if primary == "unknown_failure" and repeat_count >= 2:
+                    regen_plan["rerun_scope"] = {"mode": "fallback_replan_from_l1"}
+                    regen_plan["reason"] = "T1: consecutive unknown_failure >= 2"
+
+                # Fallback trigger T2: after fallback_replan_from_l1, still failing -> full reset.
+                if force_full_reset:
+                    regen_plan["rerun_scope"] = {"mode": "fallback_full_replan_from_inputs"}
+                    regen_plan["reason"] = "T2: soft reset from L1 did not converge"
+
+                # Fallback trigger T3: local patch 3 rounds without metric improvement -> fallback from L1.
+                # Use metrics from validation_summary: vuln_hits should increase OR fixed_hits should decrease.
+                delta = validation_summary.get("run", {}).get("delta", {})
+                vuln_hits = int(delta.get("vulnerable_results", 0) or 0)
+                fixed_hits = int(delta.get("fixed_results", 0) or 0)
+                proposed_mode = (regen_plan.get("rerun_scope", {}) or {}).get("mode")
+                history.append(
+                    {
+                        "iteration": iteration,
+                        "primary_failure_type": primary,
+                        "regen_mode": proposed_mode,
+                        "metrics": {"vuln_hits": vuln_hits, "fixed_hits": fixed_hits},
+                    }
+                )
+                if len(history) >= 3:
+                    window = history[-3:]
+                    local_modes = {"rerun_composer_only", "rerun_fragments", "rerun_l3"}
+                    if all((e.get("regen_mode") in local_modes) for e in window):
+                        base = window[0].get("metrics", {})
+                        improved = False
+                        prev_v = int(base.get("vuln_hits", 0) or 0)
+                        prev_f = int(base.get("fixed_hits", 0) or 0)
+                        for e in window[1:]:
+                            m = e.get("metrics", {})
+                            v = int(m.get("vuln_hits", 0) or 0)
+                            f = int(m.get("fixed_hits", 0) or 0)
+                            if v > prev_v or f < prev_f:
+                                improved = True
+                            prev_v, prev_f = v, f
+                        if not improved and not force_full_reset and not (
+                            primary == "unknown_failure" and repeat_count >= 2
+                        ):
+                            regen_plan["rerun_scope"] = {"mode": "fallback_replan_from_l1"}
+                            regen_plan["reason"] = "T3: local patch >= 3 without improvement"
+                _write_json(os.path.join(iter_dir, "regen_plan.json"), regen_plan)
+                _trace("update_ok", "PLAN_REGEN_SCOPE", {"regen_plan": regen_plan.get("rerun_scope", {})})
+
+                # Stop if we have reached the iteration limit.
+                if iteration >= self.max_iters:
+                    break
+
+                scope = regen_plan.get("rerun_scope", {})
+                # Selective regeneration per scope.
+                if scope.get("retry_validate"):
+                    _trace("retry_validate", "VALIDATE_COMPILE")
+                    continue
+
+                # Fallback modes (doc section 19): reset parts of lineage.
+                mode = scope.get("mode") if isinstance(scope, dict) else None
+                if mode in ("fallback_replan_from_l1", "fallback_full_replan_from_inputs"):
+                    _trace("fallback_mode", "PLAN_READY", {"mode": mode})
+
+                    # Drop derived artifacts per design doc: keep feedback_loop + trace.
+                    l1_path, l2_path, l3_path = _load_case_ir_paths(ir_case_dir)
+                    gen_dir = os.path.join(ir_case_dir, self.generation_subdir)
+
+                    # Preserve loop-control guidance that is intentionally carried in
+                    # `fragment_bundle.json` across iterations. Fallback resets delete
+                    # `generated_query/`, so without this we silently drop diagnoser
+                    # guidance (`/feedback`, `/feedback_history`, `/regen_steps`).
+                    preserved_bundle_fields: Dict[str, Any] = {}
+                    try:
+                        fb_path = os.path.join(gen_dir, "fragment_bundle.json")
+                        if os.path.exists(fb_path):
+                            fb_obj = _read_json(fb_path)
+                            if isinstance(fb_obj, dict):
+                                for k in ("feedback", "feedback_history", "regen_steps"):
+                                    if k in fb_obj:
+                                        preserved_bundle_fields[k] = fb_obj.get(k)
+                    except Exception:
+                        preserved_bundle_fields = {}
+                    try:
+                        if os.path.isdir(gen_dir):
+                            shutil.rmtree(gen_dir, ignore_errors=True)
+                    except Exception:
+                        pass
+
+                    for p in (l2_path, l3_path):
+                        try:
+                            if os.path.exists(p):
+                                os.remove(p)
+                        except Exception:
+                            pass
+                    if mode == "fallback_full_replan_from_inputs":
+                        try:
+                            if os.path.exists(l1_path):
+                                os.remove(l1_path)
+                        except Exception:
+                            pass
+                    await plan_agent.analyze(cve_id, output_root=self.ir_root)
+
+                    # Seed the new generation directory with the preserved guidance so
+                    # fragment generation prompts can see it even after a fallback reset.
+                    if preserved_bundle_fields:
+                        try:
+                            os.makedirs(gen_dir, exist_ok=True)
+                            seed = {"case_id": cve_id, "fragments": []}
+                            seed.update(preserved_bundle_fields)
+                            _write_json(os.path.join(gen_dir, "fragment_bundle.json"), seed)
+                        except Exception:
+                            pass
+                    _trace("rerun_gen", "GEN_QUERY", {"mode": mode})
+                    await gen_agent.generate(
+                        cve_id,
+                        ir_root=self.ir_root,
+                        generation_subdir=self.generation_subdir,
+                        rerun_steps=["*"],
+                        rerun_composer=True,
+                        # Still reruns everything (rerun_steps=["*"]), but allows loading
+                        # the seeded bundle so loop feedback is injected into step prompts.
+                        reuse_existing_fragments=True,
+                    )
+                    _trace("gen_ok", "VALIDATE_COMPILE")
+                    last_regen_mode = mode
+                    continue
+
+                # PLAN regeneration (L1/L2/L3)
+                if scope.get("rerun_l1") or scope.get("rerun_l2") or scope.get("rerun_l3"):
+                    _trace("rerun_plan", "PLAN_READY", scope)
+                    await plan_agent.analyze_partial(
+                        cve_id,
+                        output_root=self.ir_root,
+                        rerun_l1=bool(scope.get("rerun_l1")),
+                        rerun_l2=bool(scope.get("rerun_l2")),
+                        rerun_l3=bool(scope.get("rerun_l3")),
+                    )
+                    _trace("plan_ok", "GEN_QUERY")
+                _trace("rerun_gen", "GEN_QUERY", scope)
+                await gen_agent.generate(
+                    cve_id,
+                    ir_root=self.ir_root,
+                    generation_subdir=self.generation_subdir,
+                    rerun_steps=scope.get("rerun_steps")
+                    if scope.get("rerun_steps")
+                    else (["*"] if scope.get("rerun_all_fragments") else []),
+                    rerun_composer=bool(scope.get("rerun_composer", True)),
+                    reuse_existing_fragments=not bool(scope.get("rerun_all_fragments")),
+                )
+                _trace("gen_ok", "VALIDATE_COMPILE")
+                last_regen_mode = scope.get("mode") if isinstance(scope, dict) else None
+
+            _trace("budget_exhausted", "TERMINAL_FAIL", {"summary_path": last_summary_path})
             final_fail = {
                 "status": "failed",
                 "iterations": self.max_iters,
@@ -2188,230 +3358,11 @@ class FeedbackLoopController:
             _write_json(meta_path, run_meta)
             _write_json(os.path.join(feedback_dir, "final_failure_summary.json"), final_fail)
             final_fail["runtime_seconds_total"] = run_meta.get("elapsed_seconds_total")
-            _maybe_cleanup_orphans()
             return final_fail
-
-        for iteration in range(start_iter, self.max_iters + 1):
-            iter_dir = self._iter_dir(cve_id, iteration)
-            _ensure_dir(iter_dir)
-
-            # VALIDATE_COMPILE + VALIDATE_EXEC_EVAL (combined)
-            _trace("validate_start", "VALIDATE_COMPILE", {"iter_dir": iter_dir})
-
-            valid_result = await valid_agent.validate(
-                cve_id,
-                ir_root=self.ir_root,
-                generation_subdir=self.generation_subdir,
-                codeql_path=self.codeql_path,
-                output_dir=iter_dir,
-                artifact_prefix=f"iter_{iteration:02d}",
-            )
-            last_summary_path = valid_result["summary_path"]
-            validation_summary = _read_json(last_summary_path)
-            _write_json(os.path.join(iter_dir, "validation_summary.json"), validation_summary)
-
-            # Iteration-level housekeeping: reap orphaned MCP/LSP processes that can
-            # accumulate across iterations (PPID=1 only).
+        finally:
+            # Always cleanup across success/failure/interrupt.
             _maybe_cleanup_orphans()
-
-            if not validation_summary.get("compile", {}).get("success"):
-                _trace("compile_fail", "ANALYZE_FAILURE", {"summary_path": last_summary_path})
-            else:
-                _trace("compile_ok", "VALIDATE_EXEC_EVAL", {"summary_path": last_summary_path})
-
-            if self._success(validation_summary):
-                _trace("eval_success", "TERMINAL_SUCCESS", {"summary_path": last_summary_path})
-                _write_json(
-                    os.path.join(iter_dir, "result.json"),
-                    {"status": "success", "summary_path": last_summary_path},
-                )
-                run_meta["elapsed_seconds_total"] = float(run_meta.get("elapsed_seconds_total", 0.0) or 0.0) + (time.time() - invocation_start)
-                run_meta["last_updated_at_utc"] = datetime.utcnow().isoformat() + "Z"
-                _write_json(meta_path, run_meta)
-                _maybe_cleanup_orphans()
-                return {
-                    "status": "success",
-                    "iterations": iteration,
-                    "summary_path": last_summary_path,
-                    "runtime_seconds_total": run_meta.get("elapsed_seconds_total"),
-                }
-
-            # Failure path: analyze + update + plan selective regeneration
-            _trace("eval_fail", "ANALYZE_FAILURE", {"summary_path": last_summary_path})
-            l1, l2, l3 = _load_case_ir(ir_case_dir)
-            failure_report = self.analyzer.analyze(case_id=cve_id, iteration=iteration, validation_summary=validation_summary)
-            _write_json(os.path.join(iter_dir, "failure_report.json"), failure_report)
-
-            primary = failure_report.get("primary_failure_type")
-
-            # Regen fallback trigger T2: soft reset (from L1) didn't fix -> full reset.
-            force_full_reset = bool(last_regen_mode == "fallback_replan_from_l1")
-
-            if primary and primary == last_primary_failure:
-                repeat_count += 1
-            else:
-                last_primary_failure = primary
-                repeat_count = 1
-            _trace("analyze_ok", "APPLY_UPDATE", {"primary_failure_type": primary, "repeat_count": repeat_count})
-
-            update_actions = self.updater.derive_actions(
-                failure_report=failure_report,
-                l1=l1,
-                l2=l2,
-                l3=l3,
-                failure_repeat_count=repeat_count,
-            )
-            _write_json(os.path.join(iter_dir, "update_actions.json"), update_actions)
-
-            l1_u, l2_u, l3_u = self.updater.apply_actions(l1=l1, l2=l2, l3=l3, update_actions=update_actions)
-            _write_json(os.path.join(iter_dir, "updated_l1.json"), l1_u)
-            _write_json(os.path.join(iter_dir, "updated_l2.json"), l2_u)
-            _write_json(os.path.join(iter_dir, "updated_l3.json"), l3_u)
-
-            # Write updated IR back as current working version.
-            _write_case_ir(ir_case_dir, l1_u, l2_u, l3_u)
-
-            regen_plan = self.planner.build_regen_plan(
-                case_id=cve_id,
-                iteration=iteration,
-                update_actions=update_actions,
-                primary_failure_type=primary,
-                failure_repeat_count=repeat_count,
-            )
-
-            # Fallback trigger T1: 2 consecutive unknown failures -> fallback_replan_from_l1.
-            if primary == "unknown_failure" and repeat_count >= 2:
-                regen_plan["rerun_scope"] = {"mode": "fallback_replan_from_l1"}
-                regen_plan["reason"] = "T1: consecutive unknown_failure >= 2"
-
-            # Fallback trigger T2: after fallback_replan_from_l1, still failing -> full reset.
-            if force_full_reset:
-                regen_plan["rerun_scope"] = {"mode": "fallback_full_replan_from_inputs"}
-                regen_plan["reason"] = "T2: soft reset from L1 did not converge"
-
-            # Fallback trigger T3: local patch 3 rounds without metric improvement -> fallback from L1.
-            # Use metrics from validation_summary: vuln_hits should increase OR fixed_hits should decrease.
-            delta = validation_summary.get("run", {}).get("delta", {})
-            vuln_hits = int(delta.get("vulnerable_results", 0) or 0)
-            fixed_hits = int(delta.get("fixed_results", 0) or 0)
-            proposed_mode = (regen_plan.get("rerun_scope", {}) or {}).get("mode")
-            history.append(
-                {
-                    "iteration": iteration,
-                    "primary_failure_type": primary,
-                    "regen_mode": proposed_mode,
-                    "metrics": {"vuln_hits": vuln_hits, "fixed_hits": fixed_hits},
-                }
-            )
-            if len(history) >= 3:
-                window = history[-3:]
-                local_modes = {"rerun_composer_only", "rerun_fragments", "rerun_l3"}
-                if all((e.get("regen_mode") in local_modes) for e in window):
-                    base = window[0].get("metrics", {})
-                    improved = False
-                    prev_v = int(base.get("vuln_hits", 0) or 0)
-                    prev_f = int(base.get("fixed_hits", 0) or 0)
-                    for e in window[1:]:
-                        m = e.get("metrics", {})
-                        v = int(m.get("vuln_hits", 0) or 0)
-                        f = int(m.get("fixed_hits", 0) or 0)
-                        if v > prev_v or f < prev_f:
-                            improved = True
-                        prev_v, prev_f = v, f
-                    if not improved and not force_full_reset and not (primary == "unknown_failure" and repeat_count >= 2):
-                        regen_plan["rerun_scope"] = {"mode": "fallback_replan_from_l1"}
-                        regen_plan["reason"] = "T3: local patch >= 3 without improvement"
-            _write_json(os.path.join(iter_dir, "regen_plan.json"), regen_plan)
-            _trace("update_ok", "PLAN_REGEN_SCOPE", {"regen_plan": regen_plan.get("rerun_scope", {})})
-
-            # Stop if we have reached the iteration limit.
-            if iteration >= self.max_iters:
-                break
-
-            scope = regen_plan.get("rerun_scope", {})
-            # Selective regeneration per scope.
-            if scope.get("retry_validate"):
-                _trace("retry_validate", "VALIDATE_COMPILE")
-                continue
-
-            # Fallback modes (doc section 19): reset parts of lineage.
-            mode = scope.get("mode") if isinstance(scope, dict) else None
-            if mode in ("fallback_replan_from_l1", "fallback_full_replan_from_inputs"):
-                _trace("fallback_mode", "PLAN_READY", {"mode": mode})
-
-                # Drop derived artifacts per design doc: keep feedback_loop + trace.
-                l1_path, l2_path, l3_path = _load_case_ir_paths(ir_case_dir)
-                gen_dir = os.path.join(ir_case_dir, self.generation_subdir)
-                try:
-                    if os.path.isdir(gen_dir):
-                        shutil.rmtree(gen_dir, ignore_errors=True)
-                except Exception:
-                    pass
-
-                for p in (l2_path, l3_path):
-                    try:
-                        if os.path.exists(p):
-                            os.remove(p)
-                    except Exception:
-                        pass
-                if mode == "fallback_full_replan_from_inputs":
-                    try:
-                        if os.path.exists(l1_path):
-                            os.remove(l1_path)
-                    except Exception:
-                        pass
-                await plan_agent.analyze(cve_id, output_root=self.ir_root)
-                _trace("rerun_gen", "GEN_QUERY", {"mode": mode})
-                await gen_agent.generate(
-                    cve_id,
-                    ir_root=self.ir_root,
-                    generation_subdir=self.generation_subdir,
-                    rerun_steps=["*"],
-                    rerun_composer=True,
-                    reuse_existing_fragments=False,
-                )
-                _trace("gen_ok", "VALIDATE_COMPILE")
-                last_regen_mode = mode
-                continue
-
-            # PLAN regeneration (L1/L2/L3)
-            if scope.get("rerun_l1") or scope.get("rerun_l2") or scope.get("rerun_l3"):
-                _trace("rerun_plan", "PLAN_READY", scope)
-                await plan_agent.analyze_partial(
-                    cve_id,
-                    output_root=self.ir_root,
-                    rerun_l1=bool(scope.get("rerun_l1")),
-                    rerun_l2=bool(scope.get("rerun_l2")),
-                    rerun_l3=bool(scope.get("rerun_l3")),
-                )
-                _trace("plan_ok", "GEN_QUERY")
-            _trace("rerun_gen", "GEN_QUERY", scope)
-            await gen_agent.generate(
-                cve_id,
-                ir_root=self.ir_root,
-                generation_subdir=self.generation_subdir,
-                rerun_steps=scope.get("rerun_steps") if scope.get("rerun_steps") else (["*"] if scope.get("rerun_all_fragments") else []),
-                rerun_composer=bool(scope.get("rerun_composer", True)),
-                reuse_existing_fragments=not bool(scope.get("rerun_all_fragments")),
-            )
-            _trace("gen_ok", "VALIDATE_COMPILE")
-            last_regen_mode = scope.get("mode") if isinstance(scope, dict) else None
-
-        _trace("budget_exhausted", "TERMINAL_FAIL", {"summary_path": last_summary_path})
-        final_fail = {
-            "status": "failed",
-            "iterations": self.max_iters,
-            "summary_path": last_summary_path,
-            "primary_failure_type": last_primary_failure,
-            "repeat_count": repeat_count,
-        }
-        run_meta["elapsed_seconds_total"] = float(run_meta.get("elapsed_seconds_total", 0.0) or 0.0) + (time.time() - invocation_start)
-        run_meta["last_updated_at_utc"] = datetime.utcnow().isoformat() + "Z"
-        _write_json(meta_path, run_meta)
-        _write_json(os.path.join(feedback_dir, "final_failure_summary.json"), final_fail)
-        final_fail["runtime_seconds_total"] = run_meta.get("elapsed_seconds_total")
-        _maybe_cleanup_orphans()
-        return final_fail
+            _maybe_cleanup_backend_sessions()
 
 
 async def main() -> None:
@@ -2426,7 +3377,11 @@ async def main() -> None:
     parser.add_argument("--ablation-mode", default="full", choices=["full", "no_tools", "no_lsp", "no_docs", "no_ast"])
     parser.add_argument("--working-dir", default=None, help="Workspace root; defaults to repository root")
     parser.add_argument("--compile-query", action="store_true", help="Compile-check the generated CodeQL query")
-    parser.add_argument("--codeql-path", default=os.environ.get("CODEQL_PATH", ""), help="Path to the CodeQL CLI executable")
+    parser.add_argument(
+        "--codeql-path",
+        default=os.environ.get("CODEQL_PATH", "") or shutil.which("codeql") or "",
+        help="Path to the CodeQL CLI executable",
+    )
     parser.add_argument("--max-iters", type=int, default=3, help="Max iterations for feedback loop mode")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()

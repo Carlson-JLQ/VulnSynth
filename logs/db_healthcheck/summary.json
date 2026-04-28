@@ -1,0 +1,298 @@
+{
+  "codeql": "/opt/codeql_2.23.3/codeql",
+  "query": "/home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql",
+  "db_count": 36,
+  "ok": 35,
+  "fail": 1,
+  "seconds": 806.45,
+  "results": [
+    {
+      "db_dir": "/home/byteide/research/VulnSynth/cves/CVE-2024-48944/CVE-2024-48944-vul",
+      "ok": true,
+      "rc": 0,
+      "seconds": 20.71,
+      "output": "/home/byteide/research/VulnSynth/logs/db_healthcheck/CVE-2024-48944-vul.sarif",
+      "stderr_tail": "Running queries.\nError retrieving qlpack commit hash from Git repository\nCompiling query plan for /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\n[1/1 comp 15.4s] Compiled /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\nStarting evaluation of ql-coder/src/queries/db_healthcheck.ql.\n[1/1 eval 220ms] Evaluation done; writing results to ql-coder/src/queries/db_healthcheck.bqrs.\nShutting down query evaluator.\nInterpreting results."
+    },
+    {
+      "db_dir": "/home/byteide/research/VulnSynth/cves/CVE-2024-48944/CVE-2024-48944-fix",
+      "ok": true,
+      "rc": 0,
+      "seconds": 20.54,
+      "output": "/home/byteide/research/VulnSynth/logs/db_healthcheck/CVE-2024-48944-fix.sarif",
+      "stderr_tail": "Running queries.\nError retrieving qlpack commit hash from Git repository\nCompiling query plan for /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\n[1/1 comp 15.1s] Compiled /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\nStarting evaluation of ql-coder/src/queries/db_healthcheck.ql.\n[1/1 eval 294ms] Evaluation done; writing results to ql-coder/src/queries/db_healthcheck.bqrs.\nShutting down query evaluator.\nInterpreting results."
+    },
+    {
+      "db_dir": "/home/byteide/research/VulnSynth/cves/CVE-2025-24399/CVE-2025-24399-vul",
+      "ok": true,
+      "rc": 0,
+      "seconds": 20.34,
+      "output": "/home/byteide/research/VulnSynth/logs/db_healthcheck/CVE-2025-24399-vul.sarif",
+      "stderr_tail": "Running queries.\nError retrieving qlpack commit hash from Git repository\nCompiling query plan for /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\n[1/1 comp 15s] Compiled /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\nStarting evaluation of ql-coder/src/queries/db_healthcheck.ql.\n[1/1 eval 344ms] Evaluation done; writing results to ql-coder/src/queries/db_healthcheck.bqrs.\nShutting down query evaluator.\nInterpreting results."
+    },
+    {
+      "db_dir": "/home/byteide/research/VulnSynth/cves/CVE-2025-24399/CVE-2025-24399-fix",
+      "ok": true,
+      "rc": 0,
+      "seconds": 21.65,
+      "output": "/home/byteide/research/VulnSynth/logs/db_healthcheck/CVE-2025-24399-fix.sarif",
+      "stderr_tail": "Running queries.\nError retrieving qlpack commit hash from Git repository\nCompiling query plan for /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\n[1/1 comp 16.2s] Compiled /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\nStarting evaluation of ql-coder/src/queries/db_healthcheck.ql.\n[1/1 eval 358ms] Evaluation done; writing results to ql-coder/src/queries/db_healthcheck.bqrs.\nShutting down query evaluator.\nInterpreting results."
+    },
+    {
+      "db_dir": "/home/byteide/research/VulnSynth/cves/CVE-2025-24790/CVE-2025-24790-vul",
+      "ok": true,
+      "rc": 0,
+      "seconds": 21.6,
+      "output": "/home/byteide/research/VulnSynth/logs/db_healthcheck/CVE-2025-24790-vul.sarif",
+      "stderr_tail": "Running queries.\nError retrieving qlpack commit hash from Git repository\nCompiling query plan for /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\n[1/1 comp 15.1s] Compiled /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\nStarting evaluation of ql-coder/src/queries/db_healthcheck.ql.\n[1/1 eval 1.2s] Evaluation done; writing results to ql-coder/src/queries/db_healthcheck.bqrs.\nShutting down query evaluator.\nInterpreting results."
+    },
+    {
+      "db_dir": "/home/byteide/research/VulnSynth/cves/CVE-2025-24790/CVE-2025-24790-fix",
+      "ok": true,
+      "rc": 0,
+      "seconds": 29.38,
+      "output": "/home/byteide/research/VulnSynth/logs/db_healthcheck/CVE-2025-24790-fix.sarif",
+      "stderr_tail": "Running queries.\nError retrieving qlpack commit hash from Git repository\nCompiling query plan for /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\n[1/1 comp 20.9s] Compiled /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\nStarting evaluation of ql-coder/src/queries/db_healthcheck.ql.\n[1/1 eval 1.6s] Evaluation done; writing results to ql-coder/src/queries/db_healthcheck.bqrs.\nShutting down query evaluator.\nInterpreting results."
+    },
+    {
+      "db_dir": "/home/byteide/research/VulnSynth/cves/CVE-2025-26074/CVE-2025-26074-vul",
+      "ok": true,
+      "rc": 0,
+      "seconds": 22.03,
+      "output": "/home/byteide/research/VulnSynth/logs/db_healthcheck/CVE-2025-26074-vul.sarif",
+      "stderr_tail": "Running queries.\nError retrieving qlpack commit hash from Git repository\nCompiling query plan for /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\n[1/1 comp 15.2s] Compiled /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\nStarting evaluation of ql-coder/src/queries/db_healthcheck.ql.\n[1/1 eval 1s] Evaluation done; writing results to ql-coder/src/queries/db_healthcheck.bqrs.\nShutting down query evaluator.\nInterpreting results."
+    },
+    {
+      "db_dir": "/home/byteide/research/VulnSynth/cves/CVE-2025-26074/CVE-2025-26074-fix",
+      "ok": true,
+      "rc": 0,
+      "seconds": 21.31,
+      "output": "/home/byteide/research/VulnSynth/logs/db_healthcheck/CVE-2025-26074-fix.sarif",
+      "stderr_tail": "Running queries.\nError retrieving qlpack commit hash from Git repository\nCompiling query plan for /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\n[1/1 comp 14.7s] Compiled /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\nStarting evaluation of ql-coder/src/queries/db_healthcheck.ql.\n[1/1 eval 1.1s] Evaluation done; writing results to ql-coder/src/queries/db_healthcheck.bqrs.\nShutting down query evaluator.\nInterpreting results."
+    },
+    {
+      "db_dir": "/home/byteide/research/VulnSynth/cves/CVE-2025-27818/CVE-2025-27818-vul",
+      "ok": true,
+      "rc": 0,
+      "seconds": 28.88,
+      "output": "/home/byteide/research/VulnSynth/logs/db_healthcheck/CVE-2025-27818-vul.sarif",
+      "stderr_tail": "Running queries.\nError retrieving qlpack commit hash from Git repository\nCompiling query plan for /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\n[1/1 comp 15.5s] Compiled /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\nStarting evaluation of ql-coder/src/queries/db_healthcheck.ql.\n[1/1 eval 5.6s] Evaluation done; writing results to ql-coder/src/queries/db_healthcheck.bqrs.\nShutting down query evaluator.\nInterpreting results."
+    },
+    {
+      "db_dir": "/home/byteide/research/VulnSynth/cves/CVE-2025-27818/CVE-2025-27818-fix",
+      "ok": true,
+      "rc": 0,
+      "seconds": 27.76,
+      "output": "/home/byteide/research/VulnSynth/logs/db_healthcheck/CVE-2025-27818-fix.sarif",
+      "stderr_tail": "Running queries.\nError retrieving qlpack commit hash from Git repository\nCompiling query plan for /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\n[1/1 comp 15.4s] Compiled /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\nStarting evaluation of ql-coder/src/queries/db_healthcheck.ql.\n[1/1 eval 5.6s] Evaluation done; writing results to ql-coder/src/queries/db_healthcheck.bqrs.\nShutting down query evaluator.\nInterpreting results."
+    },
+    {
+      "db_dir": "/home/byteide/research/VulnSynth/cves/CVE-2025-27820/CVE-2025-27820-vul",
+      "ok": true,
+      "rc": 0,
+      "seconds": 22.63,
+      "output": "/home/byteide/research/VulnSynth/logs/db_healthcheck/CVE-2025-27820-vul.sarif",
+      "stderr_tail": "Running queries.\nError retrieving qlpack commit hash from Git repository\nCompiling query plan for /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\n[1/1 comp 15.9s] Compiled /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\nStarting evaluation of ql-coder/src/queries/db_healthcheck.ql.\n[1/1 eval 1s] Evaluation done; writing results to ql-coder/src/queries/db_healthcheck.bqrs.\nShutting down query evaluator.\nInterpreting results."
+    },
+    {
+      "db_dir": "/home/byteide/research/VulnSynth/cves/CVE-2025-27820/CVE-2025-27820-fix",
+      "ok": true,
+      "rc": 0,
+      "seconds": 21.31,
+      "output": "/home/byteide/research/VulnSynth/logs/db_healthcheck/CVE-2025-27820-fix.sarif",
+      "stderr_tail": "Running queries.\nError retrieving qlpack commit hash from Git repository\nCompiling query plan for /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\n[1/1 comp 14.9s] Compiled /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\nStarting evaluation of ql-coder/src/queries/db_healthcheck.ql.\n[1/1 eval 1.1s] Evaluation done; writing results to ql-coder/src/queries/db_healthcheck.bqrs.\nShutting down query evaluator.\nInterpreting results."
+    },
+    {
+      "db_dir": "/home/byteide/research/VulnSynth/cves/CVE-2025-31723/CVE-2025-31723-vul",
+      "ok": true,
+      "rc": 0,
+      "seconds": 21.13,
+      "output": "/home/byteide/research/VulnSynth/logs/db_healthcheck/CVE-2025-31723-vul.sarif",
+      "stderr_tail": "Running queries.\nError retrieving qlpack commit hash from Git repository\nCompiling query plan for /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\n[1/1 comp 15.3s] Compiled /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\nStarting evaluation of ql-coder/src/queries/db_healthcheck.ql.\n[1/1 eval 413ms] Evaluation done; writing results to ql-coder/src/queries/db_healthcheck.bqrs.\nShutting down query evaluator.\nInterpreting results."
+    },
+    {
+      "db_dir": "/home/byteide/research/VulnSynth/cves/CVE-2025-31723/CVE-2025-31723-fix",
+      "ok": true,
+      "rc": 0,
+      "seconds": 20.16,
+      "output": "/home/byteide/research/VulnSynth/logs/db_healthcheck/CVE-2025-31723-fix.sarif",
+      "stderr_tail": "Running queries.\nError retrieving qlpack commit hash from Git repository\nCompiling query plan for /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\n[1/1 comp 14.8s] Compiled /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\nStarting evaluation of ql-coder/src/queries/db_healthcheck.ql.\n[1/1 eval 365ms] Evaluation done; writing results to ql-coder/src/queries/db_healthcheck.bqrs.\nShutting down query evaluator.\nInterpreting results."
+    },
+    {
+      "db_dir": "/home/byteide/research/VulnSynth/cves/CVE-2025-32959/CVE-2025-32959-vul",
+      "ok": true,
+      "rc": 0,
+      "seconds": 22.89,
+      "output": "/home/byteide/research/VulnSynth/logs/db_healthcheck/CVE-2025-32959-vul.sarif",
+      "stderr_tail": "Running queries.\nError retrieving qlpack commit hash from Git repository\nCompiling query plan for /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\n[1/1 comp 14.6s] Compiled /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\nStarting evaluation of ql-coder/src/queries/db_healthcheck.ql.\n[1/1 eval 2.5s] Evaluation done; writing results to ql-coder/src/queries/db_healthcheck.bqrs.\nShutting down query evaluator.\nInterpreting results."
+    },
+    {
+      "db_dir": "/home/byteide/research/VulnSynth/cves/CVE-2025-32959/CVE-2025-32959-fix",
+      "ok": true,
+      "rc": 0,
+      "seconds": 23.78,
+      "output": "/home/byteide/research/VulnSynth/logs/db_healthcheck/CVE-2025-32959-fix.sarif",
+      "stderr_tail": "Running queries.\nError retrieving qlpack commit hash from Git repository\nCompiling query plan for /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\n[1/1 comp 15s] Compiled /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\nStarting evaluation of ql-coder/src/queries/db_healthcheck.ql.\n[1/1 eval 2.4s] Evaluation done; writing results to ql-coder/src/queries/db_healthcheck.bqrs.\nShutting down query evaluator.\nInterpreting results."
+    },
+    {
+      "db_dir": "/home/byteide/research/VulnSynth/cves/CVE-2025-32960/CVE-2025-32960-vul",
+      "ok": true,
+      "rc": 0,
+      "seconds": 20.61,
+      "output": "/home/byteide/research/VulnSynth/logs/db_healthcheck/CVE-2025-32960-vul.sarif",
+      "stderr_tail": "Running queries.\nError retrieving qlpack commit hash from Git repository\nCompiling query plan for /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\n[1/1 comp 14.9s] Compiled /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\nStarting evaluation of ql-coder/src/queries/db_healthcheck.ql.\n[1/1 eval 530ms] Evaluation done; writing results to ql-coder/src/queries/db_healthcheck.bqrs.\nShutting down query evaluator.\nInterpreting results."
+    },
+    {
+      "db_dir": "/home/byteide/research/VulnSynth/cves/CVE-2025-32960/CVE-2025-32960-fix",
+      "ok": true,
+      "rc": 0,
+      "seconds": 20.56,
+      "output": "/home/byteide/research/VulnSynth/logs/db_healthcheck/CVE-2025-32960-fix.sarif",
+      "stderr_tail": "Running queries.\nError retrieving qlpack commit hash from Git repository\nCompiling query plan for /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\n[1/1 comp 14.8s] Compiled /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\nStarting evaluation of ql-coder/src/queries/db_healthcheck.ql.\n[1/1 eval 519ms] Evaluation done; writing results to ql-coder/src/queries/db_healthcheck.bqrs.\nShutting down query evaluator.\nInterpreting results."
+    },
+    {
+      "db_dir": "/home/byteide/research/VulnSynth/cves/CVE-2025-41234/CVE-2025-41234-vul",
+      "ok": true,
+      "rc": 0,
+      "seconds": 27.47,
+      "output": "/home/byteide/research/VulnSynth/logs/db_healthcheck/CVE-2025-41234-vul.sarif",
+      "stderr_tail": "Running queries.\nError retrieving qlpack commit hash from Git repository\nCompiling query plan for /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\n[1/1 comp 15s] Compiled /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\nStarting evaluation of ql-coder/src/queries/db_healthcheck.ql.\n[1/1 eval 5.6s] Evaluation done; writing results to ql-coder/src/queries/db_healthcheck.bqrs.\nShutting down query evaluator.\nInterpreting results."
+    },
+    {
+      "db_dir": "/home/byteide/research/VulnSynth/cves/CVE-2025-41234/CVE-2025-41234-fix",
+      "ok": true,
+      "rc": 0,
+      "seconds": 27.01,
+      "output": "/home/byteide/research/VulnSynth/logs/db_healthcheck/CVE-2025-41234-fix.sarif",
+      "stderr_tail": "Running queries.\nError retrieving qlpack commit hash from Git repository\nCompiling query plan for /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\n[1/1 comp 14.7s] Compiled /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\nStarting evaluation of ql-coder/src/queries/db_healthcheck.ql.\n[1/1 eval 5.6s] Evaluation done; writing results to ql-coder/src/queries/db_healthcheck.bqrs.\nShutting down query evaluator.\nInterpreting results."
+    },
+    {
+      "db_dir": "/home/byteide/research/VulnSynth/cves/CVE-2025-48058/CVE-2025-48058-vul",
+      "ok": true,
+      "rc": 0,
+      "seconds": 20.81,
+      "output": "/home/byteide/research/VulnSynth/logs/db_healthcheck/CVE-2025-48058-vul.sarif",
+      "stderr_tail": "Running queries.\nError retrieving qlpack commit hash from Git repository\nCompiling query plan for /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\n[1/1 comp 15.2s] Compiled /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\nStarting evaluation of ql-coder/src/queries/db_healthcheck.ql.\n[1/1 eval 423ms] Evaluation done; writing results to ql-coder/src/queries/db_healthcheck.bqrs.\nShutting down query evaluator.\nInterpreting results."
+    },
+    {
+      "db_dir": "/home/byteide/research/VulnSynth/cves/CVE-2025-48058/CVE-2025-48058-fix",
+      "ok": true,
+      "rc": 0,
+      "seconds": 20.86,
+      "output": "/home/byteide/research/VulnSynth/logs/db_healthcheck/CVE-2025-48058-fix.sarif",
+      "stderr_tail": "Running queries.\nError retrieving qlpack commit hash from Git repository\nCompiling query plan for /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\n[1/1 comp 15.1s] Compiled /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\nStarting evaluation of ql-coder/src/queries/db_healthcheck.ql.\n[1/1 eval 349ms] Evaluation done; writing results to ql-coder/src/queries/db_healthcheck.bqrs.\nShutting down query evaluator.\nInterpreting results."
+    },
+    {
+      "db_dir": "/home/byteide/research/VulnSynth/cves/CVE-2025-48795/CVE-2025-48795-vul",
+      "ok": false,
+      "rc": 2,
+      "seconds": 0.87,
+      "output": null,
+      "stderr_tail": "Running queries.\nA fatal error occurred: Database at /home/byteide/research/VulnSynth/cves/CVE-2025-48795/CVE-2025-48795-vul needs to be finalized before running queries; please run codeql database finalize"
+    },
+    {
+      "db_dir": "/home/byteide/research/VulnSynth/cves/CVE-2025-48795/CVE-2025-48795-fix",
+      "ok": true,
+      "rc": 0,
+      "seconds": 21.04,
+      "output": "/home/byteide/research/VulnSynth/logs/db_healthcheck/CVE-2025-48795-fix.sarif",
+      "stderr_tail": "Running queries.\nError retrieving qlpack commit hash from Git repository\nCompiling query plan for /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\n[1/1 comp 14.8s] Compiled /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\nStarting evaluation of ql-coder/src/queries/db_healthcheck.ql.\n[1/1 eval 966ms] Evaluation done; writing results to ql-coder/src/queries/db_healthcheck.bqrs.\nShutting down query evaluator.\nInterpreting results."
+    },
+    {
+      "db_dir": "/home/byteide/research/VulnSynth/cves/CVE-2025-48955/CVE-2025-48955-vul",
+      "ok": true,
+      "rc": 0,
+      "seconds": 20.78,
+      "output": "/home/byteide/research/VulnSynth/logs/db_healthcheck/CVE-2025-48955-vul.sarif",
+      "stderr_tail": "Running queries.\nError retrieving qlpack commit hash from Git repository\nCompiling query plan for /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\n[1/1 comp 14.9s] Compiled /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\nStarting evaluation of ql-coder/src/queries/db_healthcheck.ql.\n[1/1 eval 586ms] Evaluation done; writing results to ql-coder/src/queries/db_healthcheck.bqrs.\nShutting down query evaluator.\nInterpreting results."
+    },
+    {
+      "db_dir": "/home/byteide/research/VulnSynth/cves/CVE-2025-48955/CVE-2025-48955-fix",
+      "ok": true,
+      "rc": 0,
+      "seconds": 20.97,
+      "output": "/home/byteide/research/VulnSynth/logs/db_healthcheck/CVE-2025-48955-fix.sarif",
+      "stderr_tail": "Running queries.\nError retrieving qlpack commit hash from Git repository\nCompiling query plan for /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\n[1/1 comp 15.1s] Compiled /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\nStarting evaluation of ql-coder/src/queries/db_healthcheck.ql.\n[1/1 eval 586ms] Evaluation done; writing results to ql-coder/src/queries/db_healthcheck.bqrs.\nShutting down query evaluator.\nInterpreting results."
+    },
+    {
+      "db_dir": "/home/byteide/research/VulnSynth/cves/CVE-2025-49125/CVE-2025-49125-vul",
+      "ok": true,
+      "rc": 0,
+      "seconds": 23.95,
+      "output": "/home/byteide/research/VulnSynth/logs/db_healthcheck/CVE-2025-49125-vul.sarif",
+      "stderr_tail": "Running queries.\nError retrieving qlpack commit hash from Git repository\nCompiling query plan for /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\n[1/1 comp 15.2s] Compiled /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\nStarting evaluation of ql-coder/src/queries/db_healthcheck.ql.\n[1/1 eval 2.8s] Evaluation done; writing results to ql-coder/src/queries/db_healthcheck.bqrs.\nShutting down query evaluator.\nInterpreting results."
+    },
+    {
+      "db_dir": "/home/byteide/research/VulnSynth/cves/CVE-2025-49125/CVE-2025-49125-fix",
+      "ok": true,
+      "rc": 0,
+      "seconds": 25.53,
+      "output": "/home/byteide/research/VulnSynth/logs/db_healthcheck/CVE-2025-49125-fix.sarif",
+      "stderr_tail": "Running queries.\nError retrieving qlpack commit hash from Git repository\nCompiling query plan for /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\n[1/1 comp 15.3s] Compiled /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\nStarting evaluation of ql-coder/src/queries/db_healthcheck.ql.\n[1/1 eval 4.2s] Evaluation done; writing results to ql-coder/src/queries/db_healthcheck.bqrs.\nShutting down query evaluator.\nInterpreting results."
+    },
+    {
+      "db_dir": "/home/byteide/research/VulnSynth/cves/CVE-2025-52520/CVE-2025-52520-vul",
+      "ok": true,
+      "rc": 0,
+      "seconds": 25.04,
+      "output": "/home/byteide/research/VulnSynth/logs/db_healthcheck/CVE-2025-52520-vul.sarif",
+      "stderr_tail": "Running queries.\nError retrieving qlpack commit hash from Git repository\nCompiling query plan for /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\n[1/1 comp 14.9s] Compiled /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\nStarting evaluation of ql-coder/src/queries/db_healthcheck.ql.\n[1/1 eval 4.1s] Evaluation done; writing results to ql-coder/src/queries/db_healthcheck.bqrs.\nShutting down query evaluator.\nInterpreting results."
+    },
+    {
+      "db_dir": "/home/byteide/research/VulnSynth/cves/CVE-2025-52520/CVE-2025-52520-fix",
+      "ok": true,
+      "rc": 0,
+      "seconds": 25.35,
+      "output": "/home/byteide/research/VulnSynth/logs/db_healthcheck/CVE-2025-52520-fix.sarif",
+      "stderr_tail": "Running queries.\nError retrieving qlpack commit hash from Git repository\nCompiling query plan for /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\n[1/1 comp 15.1s] Compiled /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\nStarting evaluation of ql-coder/src/queries/db_healthcheck.ql.\n[1/1 eval 4.1s] Evaluation done; writing results to ql-coder/src/queries/db_healthcheck.bqrs.\nShutting down query evaluator.\nInterpreting results."
+    },
+    {
+      "db_dir": "/home/byteide/research/VulnSynth/cves/CVE-2025-53103/CVE-2025-53103-vul",
+      "ok": true,
+      "rc": 0,
+      "seconds": 22.96,
+      "output": "/home/byteide/research/VulnSynth/logs/db_healthcheck/CVE-2025-53103-vul.sarif",
+      "stderr_tail": "Running queries.\nError retrieving qlpack commit hash from Git repository\nCompiling query plan for /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\n[1/1 comp 15.3s] Compiled /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\nStarting evaluation of ql-coder/src/queries/db_healthcheck.ql.\n[1/1 eval 2.1s] Evaluation done; writing results to ql-coder/src/queries/db_healthcheck.bqrs.\nShutting down query evaluator.\nInterpreting results."
+    },
+    {
+      "db_dir": "/home/byteide/research/VulnSynth/cves/CVE-2025-53103/CVE-2025-53103-fix",
+      "ok": true,
+      "rc": 0,
+      "seconds": 23.87,
+      "output": "/home/byteide/research/VulnSynth/logs/db_healthcheck/CVE-2025-53103-fix.sarif",
+      "stderr_tail": "Running queries.\nError retrieving qlpack commit hash from Git repository\nCompiling query plan for /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\n[1/1 comp 15.6s] Compiled /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\nStarting evaluation of ql-coder/src/queries/db_healthcheck.ql.\n[1/1 eval 2s] Evaluation done; writing results to ql-coder/src/queries/db_healthcheck.bqrs.\nShutting down query evaluator.\nInterpreting results."
+    },
+    {
+      "db_dir": "/home/byteide/research/VulnSynth/cves/CVE-2025-54380/CVE-2025-54380-vul",
+      "ok": true,
+      "rc": 0,
+      "seconds": 23.66,
+      "output": "/home/byteide/research/VulnSynth/logs/db_healthcheck/CVE-2025-54380-vul.sarif",
+      "stderr_tail": "Running queries.\nError retrieving qlpack commit hash from Git repository\nCompiling query plan for /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\n[1/1 comp 15s] Compiled /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\nStarting evaluation of ql-coder/src/queries/db_healthcheck.ql.\n[1/1 eval 2.9s] Evaluation done; writing results to ql-coder/src/queries/db_healthcheck.bqrs.\nShutting down query evaluator.\nInterpreting results."
+    },
+    {
+      "db_dir": "/home/byteide/research/VulnSynth/cves/CVE-2025-54380/CVE-2025-54380-fix",
+      "ok": true,
+      "rc": 0,
+      "seconds": 23.9,
+      "output": "/home/byteide/research/VulnSynth/logs/db_healthcheck/CVE-2025-54380-fix.sarif",
+      "stderr_tail": "Running queries.\nError retrieving qlpack commit hash from Git repository\nCompiling query plan for /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\n[1/1 comp 15.1s] Compiled /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\nStarting evaluation of ql-coder/src/queries/db_healthcheck.ql.\n[1/1 eval 3s] Evaluation done; writing results to ql-coder/src/queries/db_healthcheck.bqrs.\nShutting down query evaluator.\nInterpreting results."
+    },
+    {
+      "db_dir": "/home/byteide/research/VulnSynth/cves/CVE-2025-7365/CVE-2025-7365-vul",
+      "ok": true,
+      "rc": 0,
+      "seconds": 23.01,
+      "output": "/home/byteide/research/VulnSynth/logs/db_healthcheck/CVE-2025-7365-vul.sarif",
+      "stderr_tail": "Running queries.\nError retrieving qlpack commit hash from Git repository\nCompiling query plan for /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\n[1/1 comp 15.6s] Compiled /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\nStarting evaluation of ql-coder/src/queries/db_healthcheck.ql.\n[1/1 eval 1.7s] Evaluation done; writing results to ql-coder/src/queries/db_healthcheck.bqrs.\nShutting down query evaluator.\nInterpreting results."
+    },
+    {
+      "db_dir": "/home/byteide/research/VulnSynth/cves/CVE-2025-7365/CVE-2025-7365-fix",
+      "ok": true,
+      "rc": 0,
+      "seconds": 22.12,
+      "output": "/home/byteide/research/VulnSynth/logs/db_healthcheck/CVE-2025-7365-fix.sarif",
+      "stderr_tail": "Running queries.\nError retrieving qlpack commit hash from Git repository\nCompiling query plan for /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\n[1/1 comp 14.8s] Compiled /home/byteide/research/VulnSynth/src/queries/db_healthcheck.ql.\nStarting evaluation of ql-coder/src/queries/db_healthcheck.ql.\n[1/1 eval 1.7s] Evaluation done; writing results to ql-coder/src/queries/db_healthcheck.bqrs.\nShutting down query evaluator.\nInterpreting results."
+    }
+  ]
+}

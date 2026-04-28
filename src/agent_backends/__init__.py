@@ -8,7 +8,7 @@ Each backend encapsulates:
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 import logging
 
 
@@ -102,6 +102,20 @@ class AgentBackend(ABC):
                 pass
 
         self.logger.info("MCP servers cleanup completed")
+
+
+    def cleanup_sessions(self, session_ids: List[str]) -> Dict[str, int]:
+        """Best-effort cleanup of backend session state.
+
+        Backends that persist session history (e.g. CLI chat sessions) can
+        override this to remove on-disk session caches so subsequent experiments
+        don't auto-resume or reuse old context.
+
+        Default implementation is a no-op.
+        """
+
+        _ = session_ids
+        return {"removed": 0, "missing": 0, "errors": 0}
 
 
 def create_backend(agent_type: str, model: str, logger: logging.Logger,

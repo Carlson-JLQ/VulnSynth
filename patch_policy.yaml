@@ -1,0 +1,75 @@
+version: 1
+
+# Minimal patch policy for UpdateEngine.
+# This is intentionally NOT a complex DSL: it only constrains (file, op, path).
+
+allowed_ops:
+  - append
+  - replace
+  - merge
+  - remove
+
+# Optional safety knobs (UpdateEngine may choose to enforce them).
+safety:
+  require_reason: true
+  require_precondition_for_replace: false
+  max_patches_per_iteration: 20
+
+files:
+  L1_fact.json:
+    allowed_paths:
+      - /vuln_location
+      - /vuln_location/*
+      - /key_symbols
+      - /key_symbols/*
+      - /assumptions
+      - /assumptions/*
+
+  L2_schema_ir.json:
+    allowed_paths:
+      - /pattern_type
+      - /entities
+      - /entities/*
+      - /relations
+      - /relations/*
+      - /constraints
+      - /constraints/*
+      - /guards
+      - /guards/*
+      - /reporting
+      - /reporting/*
+      - /environment_conditions
+      - /environment_conditions/*
+      - /evidence
+      - /evidence/*
+
+  L3_logic_plan.json:
+    allowed_paths:
+      - /steps
+      - /steps/*
+      - /steps/*/retrieval_hints
+      - /steps/*/retrieval_hints/*
+      - /steps/*/requires_symbols
+      - /steps/*/requires_symbols/*
+      - /steps/*/produces_symbols
+      - /steps/*/produces_symbols/*
+      - /steps/*/fragment_type
+      - /steps/*/description
+
+  fragment_bundle.json:
+    allowed_paths:
+      - /regen_steps
+      - /regen_steps/*
+      - /feedback
+      - /feedback/*
+      - /feedback_history
+      - /feedback_history/*
+
+  final_query.json:
+    allowed_paths:
+      - /required_imports
+      - /required_imports/*
+      - /query_code
+      - /notes
+      - /notes/*
+

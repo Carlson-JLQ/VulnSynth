@@ -178,24 +178,15 @@ def clone_repository(github_url: str, clone_dir: str,
     attempts = 3
     for attempt in range(1, attempts + 1):
         try:
-            clone_commands = [
-                ['git', 'clone', '--quiet', '--filter=blob:none', '--no-checkout', '--depth=1', github_url, clone_dir],
-                ['git', 'clone', '--quiet', github_url, clone_dir],
-            ]
-            for command in clone_commands:
-                try:
-                    run_text_command(
-                        command,
-                        check=True,
-                        timeout=get_remaining_timeout(deadline)
-                    )
-                    return True
-                except subprocess.CalledProcessError as e:
-                    error_text = (e.stderr or str(e)).strip()
-                    print(f"  Clone mode failed ({' '.join(command[2:5]) if len(command) > 4 else 'default'}): {error_text}")
-
-                    if os.path.exists(clone_dir):
-                        shutil.rmtree(clone_dir, ignore_errors=True)
+            # Prefer a full clone to avoid missing objects during later diff/checkout
+            # (partial/shallow clones can trigger large on-demand downloads and timeouts).
+            command = ['git', 'clone', '--quiet', github_url, clone_dir]
+            run_text_command(
+                command,
+                check=True,
+                timeout=get_remaining_timeout(deadline)
+            )
+            return True
         except CVEProcessingTimeout:
             if os.path.exists(clone_dir):
                 shutil.rmtree(clone_dir, ignore_errors=True)

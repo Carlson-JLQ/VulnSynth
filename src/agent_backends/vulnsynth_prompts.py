@@ -83,20 +83,14 @@ def _shared_context(task) -> str:
 - You may inspect the diff file at `{diff_path}`.
 - You may use Chroma tools when helpful, especially:
   - `chroma_get_documents` against `{task.nvd_cache}` for NVD context
-  - `chroma_query_documents` against collections such as `codeql_local_queries`, `codeql_ql_reference`, `codeql_language_guides`, and `cwe_data`
+  - `chroma_query_documents` against `codeql_ql_reference`, `cwe_data`, and language-specific CodeQL collections (for example `java_codeql_stdlib`, `java_codeql_language_guides`, `java_codeql_local_queries`)
 
 ## CVE Description
 {cve_desc_block}
-
-## Fix Diff
-```diff
-{task.fix_commit_diff}
-```
 """
 
 
 def build_l1_prompt(task) -> str:
-    guidance = load_ir_guidance()
     return f"""
 # VulnSynth Plan Agent: Stage 1 (Generate L1 Fact Layer)
 
@@ -108,19 +102,20 @@ Your task is to:
 3. summarize the vulnerability pattern at the factual level
 4. output exactly one JSON object for the L1 fact layer
 
+Tooling rules:
+- You MAY use tools to read files and inspect the repository.
+- Do NOT call `TodoWrite`.
+- Do NOT output a plan.
+- Your final answer MUST be the single JSON object required by the Output Contract.
+
 {_shared_context(task)}
-
-## L1 Design Guidance
-{guidance["l1_design"]}
-
-## L1 Formal Guidance
-{guidance["fact_formal"]}
 
 ## Requirements
 - Focus on observable facts, not speculative CodeQL implementation details.
 - Use evidence from vulnerable code, fix diff, and regression tests.
 - Include `code_facts`, `patch_facts`, and `environment_facts`.
 - Include a `pattern_summary` that names the likely vulnerability pattern and fix strategy.
+- Keep outputs compact: prefer <= 20 `code_facts` and <= 10 `patch_facts` unless strictly necessary.
 - Do not generate L2 or L3 in this stage.
 
 ## Output Contract
@@ -132,7 +127,6 @@ Your task is to:
 
 
 def build_l2_prompt(task, l1_json: str) -> str:
-    guidance = load_ir_guidance()
     return f"""
 # VulnSynth Plan Agent: Stage 2 (Generate L2 Semantic Schema IR)
 
@@ -144,16 +138,15 @@ Your task is to:
 3. construct a typed semantic schema with entities, relations, constraints, guards, environment conditions, evidence, and reporting
 4. output exactly one JSON object for the L2 schema IR
 
+Tooling rules:
+- Do NOT call `TodoWrite`.
+- Do NOT output a plan.
+- Your final answer MUST be the single JSON object required by the Output Contract.
+
 {_shared_context(task)}
 
 ## Input L1 JSON
 {l1_json}
-
-## L2 Design Guidance
-{guidance["l2_design"]}
-
-## L2 Formal Guidance
-{guidance["schema_formal"]}
 
 ## Requirements
 - Choose the most appropriate `pattern_type`; do not force taint-flow unless the case truly is taint-flow.
@@ -171,7 +164,6 @@ Your task is to:
 
 
 def build_l3_prompt(task, l1_json: str, l2_json: str) -> str:
-    guidance = load_ir_guidance()
     return f"""
 # VulnSynth Plan Agent: Stage 3 (Generate L3 Query Construction Steps)
 
@@ -183,6 +175,11 @@ Your task is to:
 3. make each step a complete semantic unit that can be translated into a CodeQL fragment
 4. output exactly one JSON object for the L3 query-construction steps layer
 
+Tooling rules:
+- Do NOT call `TodoWrite`.
+- Do NOT output a plan.
+- Your final answer MUST be the single JSON object required by the Output Contract.
+
 {_shared_context(task)}
 
 ## Input L1 JSON
@@ -190,12 +187,6 @@ Your task is to:
 
 ## Input L2 JSON
 {l2_json}
-
-## L3 Design Guidance
-{guidance["l3_design"]}
-
-## L3 Formal Guidance
-{guidance["l3_formal"]}
 
 ## Requirements
 - Each step must correspond to one complete semantic unit, not a raw field.
@@ -220,7 +211,20 @@ def build_fragment_prompt(
     step_json: str,
     retrieval_plan_json: str,
     language: str,
+    *,
+    loop_feedback_json: str = "",
 ) -> str:
+    feedback_block = (
+        f"\n## Feedback Loop Guidance\n{loop_feedback_json}\n" if (loop_feedback_json or "").strip() else ""
+    )
+
+    lang_api_note = ""
+    if str(language).strip().lower() == "java":
+        lang_api_note = (
+            "\n## Language API Notes (Java)\n"
+            "- In this environment, Java method invocations use `MethodCall` (NOT `MethodAccess`).\n"
+            "- If you need to model a call site like `x.getResource(y)`, use `MethodCall` and its APIs (for example `getMethod()`, `getArgument(i)`, `hasQualifier()` / `getQualifier()`).\n"
+        )
     return f"""
 # VulnSynth Gen Agent: Step Fragment Generation
 
@@ -253,6 +257,8 @@ Your task is to:
 ## Retrieval Plan
 {retrieval_plan_json}
 
+{feedback_block}
+
 ## Retrieval Guidance
 - Use `nist_cve_cache` for CVE-specific grounding when needed.
 - Use `codeql_ql_reference` for shared CodeQL syntax, classes, and predicate conventions.
@@ -260,6 +266,8 @@ Your task is to:
 - Use the language-specific collections listed in the retrieval plan for classes, predicates, guides, and local query patterns.
 - Prefer language-specific collections for concrete CodeQL APIs and example query structure.
 - Use the step `description`, `retrieval_hints`, and retrieval plan query views as your retrieval inputs.
+- IMPORTANT: Only query Chroma collections listed in the Retrieval Plan (see `allowed_collection_names` / keys of `collection_query_map`). Do not invent or guess collection names.
+- If the Retrieval Plan includes `collection_where_filters`, pass the corresponding `where` filter when calling `chroma_query_documents`.
 
 ## Fragment Requirements
 - Generate a fragment only for the current step, not the whole query.
@@ -269,6 +277,8 @@ Your task is to:
 - Prefer helper predicates for reusable logic.
 - The fragment may define helper predicates, helper classes, or where/select snippets depending on the step.
 - Do not invent APIs that do not exist in `{language}` CodeQL libraries.
+
+{lang_api_note}
 
 ## Output Contract
 - Return exactly one JSON object.
@@ -287,6 +297,88 @@ Your task is to:
 """
 
 
+def build_diagnosis_prompt(
+    task,
+    *,
+    iteration: int,
+    validation_summary_path: str,
+    failure_report_path: str,
+    patch_policy_path: str,
+    validation_summary_snippet: str = "",
+    failure_report_snippet: str = "",
+) -> str:
+    """Build prompt for Diagnoser Agent.
+
+    The Diagnoser Agent must output strictly one JSON object with proposed patches.
+    Patches are constrained by `patch_policy_yaml` and must use JSON Pointer paths.
+    """
+
+    return f"""
+# VulnSynth Diagnoser Agent: Policy-Constrained Repair
+
+You are a Diagnoser Agent. Your job is to translate validation signals into a
+structured diagnosis and a small set of minimal patches that are allowed by the
+patch policy.
+
+Key rules:
+- You MUST output EXACTLY ONE JSON object and NOTHING ELSE.
+- Do NOT wrap JSON in markdown fences.
+- You may propose patches only using:
+  - op: append | replace | merge | remove
+  - file: L1_fact.json | L2_schema_ir.json | L3_logic_plan.json | fragment_bundle.json | final_query.json
+  - path: JSON Pointer (e.g. /guards/0, /steps/2/retrieval_hints)
+- Every patch MUST include a non-empty `reason`.
+- Prefer small, targeted patches (<= 5) over large rewrites.
+- If uncertainty is high, set `primary_failure_type` to `unknown_failure` and return empty `proposed_patches`.
+
+Repair strategy guidelines (important):
+- Prefer controlling regeneration rather than rewriting the entire query.
+- If the failure is localized to one or a few L3 steps (for example a wrong CodeQL API/type used in one helper predicate), prefer patching `fragment_bundle.json` to:
+  - set `/regen_steps` to a list of step ids to rerun (e.g. `["step:identify_insecure_minimal_fallback_matcher"]`), or `["*"]` to rerun all fragments.
+  - set `/feedback` (and optionally append to `/feedback_history`) with concise, actionable guidance that the next fragment generation pass must follow.
+- Use `final_query.json` patches only when the fix is truly composition-only (cannot be attributed to a single step) or when you need to apply a minimal direct edit.
+- When you patch `final_query.json:/query_code`, assume the system will *materialize the `.ql` file from that patched JSON*; do not rely on a subsequent composer rerun to preserve your change.
+
+{_shared_context(task)}
+
+## Iteration
+- iteration: {int(iteration)}
+
+## Artifacts (read from disk)
+- Validation summary JSON: `{validation_summary_path}`
+- Failure report JSON: `{failure_report_path}`
+- Patch policy YAML (authoritative): `{patch_policy_path}`
+
+Read these files first. They contain compilation/run signals and the full patch-policy constraints.
+
+## Compact Snippets (optional; prefer disk)
+Validation summary snippet:
+{validation_summary_snippet}
+
+Failure report snippet:
+{failure_report_snippet}
+
+## Output Contract (strict)
+Return one JSON object with fields:
+- case_id: string
+- iteration: number
+- primary_failure_type: string
+- confidence: number (0..1)
+- evidence: object (include key snippets like compile_success/vuln_hits/fixed_hits/compile_stderr_snippet)
+- suspected_layers: array of strings (e.g. ["L2","L3","fragment","composer"])
+- proposed_patches: array of patch objects (may be empty)
+
+Each patch object:
+- patch_id: string (optional)
+- file: string (one of the allowed files)
+- op: string (append|replace|merge|remove)
+- path: string (JSON Pointer)
+- value: any (required for append/replace/merge)
+- precondition: object (optional)
+- reason: string
+"""
+
+
 def build_query_composition_prompt(
     task,
     l1_json: str,
@@ -294,7 +386,19 @@ def build_query_composition_prompt(
     l3_json: str,
     fragment_bundle_json: str,
     language: str,
+    *,
+    loop_feedback_json: str = "",
 ) -> str:
+    feedback_block = (
+        f"\n## Feedback Loop Guidance\n{loop_feedback_json}\n" if (loop_feedback_json or "").strip() else ""
+    )
+
+    lang_api_note = ""
+    if str(language).strip().lower() == "java":
+        lang_api_note = (
+            "\n## Language API Notes (Java)\n"
+            "- Do NOT use `MethodAccess` (it is not available in this environment). Use `MethodCall` for Java method invocations.\n"
+        )
     return f"""
 # VulnSynth Gen Agent: Final Query Composition
 
@@ -312,6 +416,8 @@ Your task is to:
 ## Target Language
 - CodeQL language: `{language}`
 
+{lang_api_note}
+
 ## Input L1 JSON
 {l1_json}
 
@@ -321,8 +427,15 @@ Your task is to:
 ## Input L3 JSON
 {l3_json}
 
-## Input Step Fragments JSON
+## Fragment Index (Read files from disk)
 {fragment_bundle_json}
+
+Use the `fragment_bundle_path` and each `qlfrag_path` in `fragment_refs` to read the generated step fragments.
+Prefer composing from the `.qlfrag` files; use `fragment.json` only if you need metadata like `summary`.
+Do NOT read `fragment_bundle_path` unless you truly need `regen_steps` for loop control.
+`fragment_bundle.json` can be very large and is not needed for query composition when fragments are available.
+Treat the injected feedback guidance below as authoritative for how to correct the query during this iteration.
+{feedback_block}
 
 ## Composition Requirements
 - Compose a single complete CodeQL query.
@@ -332,6 +445,9 @@ Your task is to:
 - Prefer a correct and coherent query over mechanically concatenating every fragment verbatim.
 - Preserve the intended reporting anchor and final finding message.
 - If some fragment should be folded into a `where` clause rather than kept as a separate predicate, do so.
+- Do NOT emit predicate/function signatures without bodies (e.g., `predicate p(T x);`). Every predicate/function you define must have a body.
+- Ensure helper predicate/class names are unique (do not redefine `getMethod`, `getEnclosingCallable`, etc.).
+- Do not invent CodeQL APIs (including higher-order predicates). If unsure, use MCP retrieval to confirm.
 - The final query must be suitable for writing to a `.ql` file.
 - Do not return partial code.
 

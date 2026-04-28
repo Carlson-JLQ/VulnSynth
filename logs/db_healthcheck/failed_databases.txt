@@ -1,0 +1,1 @@
+/home/byteide/research/VulnSynth/cves/CVE-2025-48795/CVE-2025-48795-vul
