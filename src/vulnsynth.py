@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import csv
+from dataclasses import asdict
 import json
 import logging
 import os
@@ -20,19 +21,22 @@ os.environ["ANONYMIZED_TELEMETRY"] = "false"
 try:
     from .agent_backends import create_backend
     from .agent_backends import vulnsynth_prompts
+    from .query_subagents_evaluation import compile_query_once, run_query_with_evaluation_results
 except ImportError:
     from agent_backends import create_backend
     from agent_backends import vulnsynth_prompts
+    from query_subagents_evaluation import compile_query_once, run_query_with_evaluation_results
 
 try:
-    from .config import CVES_PATH, NVD_CACHE, VULNSYNTH_ROOT_DIR
+    from .config import CODEQL_PATH, CVES_PATH, NVD_CACHE, VULNSYNTH_ROOT_DIR
 except Exception:
     try:
-        from config import CVES_PATH, NVD_CACHE, VULNSYNTH_ROOT_DIR
+        from config import CODEQL_PATH, CVES_PATH, NVD_CACHE, VULNSYNTH_ROOT_DIR
     except Exception:
         VULNSYNTH_ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
         CVES_PATH = os.path.join(VULNSYNTH_ROOT_DIR, "cves")
         NVD_CACHE = "nist_cve_cache"
+        CODEQL_PATH = os.environ.get("CODEQL_PATH", "")
 
 
 LOGGER = logging.getLogger("vulnsynth")
@@ -447,6 +451,172 @@ def compile_codeql_query(
     _write_text(os.path.join(output_dir, "compile_stdout.log"), proc.stdout)
     _write_text(os.path.join(output_dir, "compile_stderr.log"), proc.stderr)
     return result
+
+
+def _ensure_query_qlpack(output_dir: str, language: str) -> str:
+    dependency_map = {
+        "java": "codeql/java-all",
+        "cpp": "codeql/cpp-all",
+    }
+    dependency = dependency_map.get(language)
+    if dependency is None:
+        raise ValueError(f"Unsupported language for qlpack generation: {language}")
+
+    qlpack_path = os.path.join(output_dir, "qlpack.yml")
+    _write_yaml_like_text(
+        qlpack_path,
+        (
+            "name: vulnsynth/generated\n"
+            "version: 0.0.1\n"
+            "dependencies:\n"
+            f"  {dependency}: \"*\"\n"
+        ),
+    )
+    return qlpack_path
+
+
+def _prepare_query_workspace(
+    *,
+    output_dir: str,
+    source_query_path: str,
+    language: str,
+) -> Dict[str, str]:
+    workspace_dir = tempfile.mkdtemp(prefix="vulnsynth_query_workspace_", dir=output_dir)
+    workspace_query_path = os.path.join(workspace_dir, os.path.basename(source_query_path))
+    _write_text(workspace_query_path, _read_text(source_query_path))
+    workspace_qlpack_path = _ensure_query_qlpack(workspace_dir, language)
+    manifest = {
+        "workspace_dir": workspace_dir,
+        "source_query_path": source_query_path,
+        "workspace_query_path": workspace_query_path,
+        "workspace_qlpack_path": workspace_qlpack_path,
+    }
+    _write_json(os.path.join(workspace_dir, "workspace_manifest.json"), manifest)
+    return manifest
+
+
+def _discover_codeql_databases(cve_dir: str, cve_id: str, language: str) -> tuple[str, str]:
+    db_suffix_map = {
+        "java": "db-java",
+        "cpp": "db-cpp",
+    }
+    db_dir_name = db_suffix_map.get(language)
+    if db_dir_name is None:
+        raise ValueError(f"Unsupported language for database discovery: {language}")
+
+    vuln_db = os.path.join(cve_dir, f"{cve_id}-vul", db_dir_name)
+    fixed_db = os.path.join(cve_dir, f"{cve_id}-fix", db_dir_name)
+
+    if os.path.isdir(vuln_db) and os.path.isdir(fixed_db):
+        return vuln_db, fixed_db
+
+    matches: dict[str, Optional[str]] = {"vul": None, "fix": None}
+    for root, dirs, _files in os.walk(cve_dir):
+        for dirname in dirs:
+            if dirname != db_dir_name:
+                continue
+            full_path = os.path.join(root, dirname)
+            lower = full_path.lower()
+            if matches["vul"] is None and "-vul" in lower:
+                matches["vul"] = full_path
+            elif matches["fix"] is None and "-fix" in lower:
+                matches["fix"] = full_path
+        if all(matches.values()):
+            break
+
+    if matches["vul"] and matches["fix"]:
+        return str(matches["vul"]), str(matches["fix"])
+
+    raise FileNotFoundError(
+        f"Could not discover vulnerable/fixed CodeQL databases for {cve_id} in {cve_dir}"
+    )
+
+
+async def _compile_and_run_generated_query(
+    *,
+    cve_id: str,
+    cve_dir: str,
+    query_path: str,
+    language: str,
+    output_dir: str,
+    logger: logging.Logger,
+) -> Dict[str, Any]:
+    workspace = _prepare_query_workspace(
+        output_dir=output_dir,
+        source_query_path=query_path,
+        language=language,
+    )
+    qlpack_path = workspace["workspace_qlpack_path"]
+    workspace_dir = workspace["workspace_dir"]
+    workspace_query_path = workspace["workspace_query_path"]
+    execution_result_path = os.path.join(output_dir, "execution_result.json")
+    try:
+        compilation_summary = await compile_query_once(workspace_query_path, logger)
+        compilation_success = "COMPILATION SUCCESS" in compilation_summary
+        compilation_summary_path = os.path.join(output_dir, "compilation_summary.txt")
+        _write_text(compilation_summary_path, compilation_summary.rstrip() + "\n")
+
+        result: Dict[str, Any] = {
+            "qlpack_path": qlpack_path,
+            "query_path": query_path,
+            "workspace_dir": workspace_dir,
+            "workspace_query_path": workspace_query_path,
+            "language": language,
+            "compilation_success": compilation_success,
+            "compilation_summary": compilation_summary,
+            "compilation_summary_path": compilation_summary_path,
+        }
+
+        if not compilation_success:
+            result["execution_skipped"] = True
+            result["execution_success"] = False
+            _write_json(execution_result_path, result)
+            result["execution_result_path"] = execution_result_path
+            return result
+
+        vuln_db_path, fixed_db_path = _discover_codeql_databases(cve_dir, cve_id, language)
+        execution_summary, vuln_eval, fixed_eval, execution_success = await run_query_with_evaluation_results(
+            query_path=workspace_query_path,
+            vuln_db_path=vuln_db_path,
+            fixed_db_path=fixed_db_path,
+            cve_id=cve_id,
+            iteration_number=1,
+            output_dir=output_dir,
+            logger=logger,
+        )
+        execution_summary_path = os.path.join(output_dir, "execution_summary.txt")
+        _write_text(execution_summary_path, execution_summary.rstrip() + "\n")
+
+        result.update(
+            {
+                "execution_skipped": False,
+                "execution_success": execution_success,
+                "execution_summary": execution_summary,
+                "execution_summary_path": execution_summary_path,
+                "vuln_db_path": vuln_db_path,
+                "fixed_db_path": fixed_db_path,
+                "vuln_eval": asdict(vuln_eval),
+                "fixed_eval": asdict(fixed_eval),
+            }
+        )
+        _write_json(execution_result_path, result)
+        result["execution_result_path"] = execution_result_path
+        return result
+    except Exception as exc:
+        failure = {
+            "qlpack_path": qlpack_path,
+            "query_path": query_path,
+            "workspace_dir": workspace_dir,
+            "workspace_query_path": workspace_query_path,
+            "language": language,
+            "compilation_success": False,
+            "execution_skipped": False,
+            "execution_success": False,
+            "error": str(exc),
+        }
+        _write_json(execution_result_path, failure)
+        failure["execution_result_path"] = execution_result_path
+        return failure
 
 
 def _infer_language_from_ir(l1: Dict[str, Any], repo_path: str) -> str:
@@ -908,12 +1078,28 @@ class VulnSynthGenAgent:
             query_path = os.path.join(output_dir, query_file_name)
             _write_text(query_path, str(final_query.get("query_code", "")).rstrip() + "\n")
 
+            self.logger.info("Starting post-generation compile and execution stage")
+            validation = await _compile_and_run_generated_query(
+                cve_id=cve_id,
+                cve_dir=cve_dir,
+                query_path=query_path,
+                language=language,
+                output_dir=output_dir,
+                logger=self.logger,
+            )
+
             return {
                 "output_dir": output_dir,
                 "fragments_dir": fragments_dir,
                 "fragment_bundle_path": fragment_bundle_path,
                 "final_query_json_path": os.path.join(output_dir, "final_query.json"),
                 "final_query_path": query_path,
+                "qlpack_path": validation["qlpack_path"],
+                "compilation_summary_path": validation.get("compilation_summary_path"),
+                "compilation_success": validation.get("compilation_success", False),
+                "execution_result_path": validation["execution_result_path"],
+                "execution_success": validation.get("execution_success", False),
+                "execution_skipped": validation.get("execution_skipped", False),
             }
         finally:
             self.logger.info("Cleaning up MCP/LSP processes after gen stage")
@@ -970,6 +1156,13 @@ async def main() -> None:
         print(f"Fragment bundle: {gen_result['fragment_bundle_path']}")
         print(f"Final query JSON: {gen_result['final_query_json_path']}")
         print(f"Final query: {gen_result['final_query_path']}")
+        print(f"qlpack: {gen_result['qlpack_path']}")
+        print(f"Compilation summary: {gen_result['compilation_summary_path']}")
+        print(f"Compilation success: {gen_result['compilation_success']}")
+        print(f"Execution result: {gen_result['execution_result_path']}")
+        print(f"Execution success: {gen_result['execution_success']}")
+        if gen_result["execution_skipped"]:
+            print("Execution stage was skipped because compilation failed")
         if args.compile_query:
             compile_result = compile_codeql_query(
                 gen_result["final_query_path"],

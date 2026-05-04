@@ -28,27 +28,96 @@ import sys
 import csv
 import argparse
 import subprocess
-import shutil
-import time
-from pathlib import Path
-from typing import List, Dict, Optional, Set
+import selectors
+from typing import List, Dict, Optional, Sequence
 
-ROOT_DIR = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT_DIR))
-try:
-    from src.config import PROJECT_INFO, CVES_PATH
-except Exception:
-    PROJECT_INFO = str(ROOT_DIR / "data" / "project_info.csv")
-    CVES_PATH = str(ROOT_DIR / "cves")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from src.config import PROJECT_INFO, CVES_PATH
 
 
-DEFAULT_SKIPPED_CVES = {"CVE-2022-36007"}
-DEFAULT_CVE_TIMEOUT_SECONDS = 600
+def stream_git_command(
+    cmd: Sequence[str],
+    cwd: Optional[str] = None,
+    prefix: str = "",
+    check: bool = True,
+) -> subprocess.CompletedProcess:
+    """Run a git command and stream progress output live.
 
+    Git usually writes clone/fetch progress to stderr with carriage returns,
+    so we stream both stdout and stderr and flush on either newline or CR.
+    """
+    process = subprocess.Popen(
+        cmd,
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=0,
+    )
 
-class CVEProcessingTimeout(TimeoutError):
-    """Raised when a single CVE exceeds the configured processing time budget."""
-    pass
+    selector = selectors.DefaultSelector()
+    buffers = {}
+
+    if process.stdout is not None:
+        selector.register(process.stdout, selectors.EVENT_READ, "stdout")
+        buffers["stdout"] = ""
+    if process.stderr is not None:
+        selector.register(process.stderr, selectors.EVENT_READ, "stderr")
+        buffers["stderr"] = ""
+
+    stdout_chunks: List[str] = []
+    stderr_chunks: List[str] = []
+
+    while selector.get_map():
+        for key, _ in selector.select():
+            stream = key.fileobj
+            stream_name = key.data
+            chunk = stream.read(1)
+
+            if chunk == "":
+                remaining = buffers[stream_name]
+                if remaining:
+                    line = f"{prefix}{remaining}" if prefix else remaining
+                    print(line, flush=True)
+                    if stream_name == "stdout":
+                        stdout_chunks.append(remaining)
+                    else:
+                        stderr_chunks.append(remaining)
+                selector.unregister(stream)
+                stream.close()
+                continue
+
+            buffers[stream_name] += chunk
+
+            if chunk in ("\n", "\r"):
+                text = buffers[stream_name].rstrip("\r\n")
+                if text:
+                    line = f"{prefix}{text}" if prefix else text
+                    print(line, flush=True)
+                    if stream_name == "stdout":
+                        stdout_chunks.append(text + "\n")
+                    else:
+                        stderr_chunks.append(text + "\n")
+                buffers[stream_name] = ""
+
+    returncode = process.wait()
+    stdout_text = "".join(stdout_chunks)
+    stderr_text = "".join(stderr_chunks)
+
+    if check and returncode != 0:
+        raise subprocess.CalledProcessError(
+            returncode=returncode,
+            cmd=list(cmd),
+            output=stdout_text,
+            stderr=stderr_text,
+        )
+
+    return subprocess.CompletedProcess(
+        args=list(cmd),
+        returncode=returncode,
+        stdout=stdout_text,
+        stderr=stderr_text,
+    )
 
 
 def load_project_info() -> Dict[str, Dict]:
@@ -68,47 +137,7 @@ def load_project_info() -> Dict[str, Dict]:
     return cve_data
 
 
-def run_text_command(command: List[str], cwd: Optional[str] = None,
-                     check: bool = True, timeout: Optional[float] = None) -> subprocess.CompletedProcess:
-    """Run a subprocess and decode text output safely.
-
-    Some repositories contain non-UTF-8 content in diffs or error messages.
-    Using replacement decoding keeps long batch runs from crashing during the
-    decode step while preserving most of the command output.
-    """
-    try:
-        return subprocess.run(
-            command,
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            encoding='utf-8',
-            errors='replace',
-            check=check,
-            timeout=timeout
-        )
-    except subprocess.TimeoutExpired as exc:
-        cmd_display = " ".join(command)
-        timeout_text = f"{timeout:.1f}s" if timeout is not None else "the configured limit"
-        raise CVEProcessingTimeout(
-            f"Command timed out after {timeout_text}: {cmd_display}"
-        ) from exc
-
-
-def get_remaining_timeout(deadline: Optional[float]) -> Optional[float]:
-    """Return remaining wall-clock budget for the current CVE."""
-    if deadline is None:
-        return None
-
-    remaining = deadline - time.monotonic()
-    if remaining <= 0:
-        raise CVEProcessingTimeout("Exceeded per-CVE processing time budget")
-
-    return remaining
-
-
-def get_latest_commit(repo_path: str, commit_ids: List[str],
-                      deadline: Optional[float] = None) -> Optional[str]:
+def get_latest_commit(repo_path: str, commit_ids: List[str]) -> Optional[str]:
     """
     Get the latest commit from a list of commit IDs based on commit timestamp.
 
@@ -130,11 +159,12 @@ def get_latest_commit(repo_path: str, commit_ids: List[str],
 
     for commit_id in commit_ids:
         try:
-            result = run_text_command(
+            result = subprocess.run(
                 ['git', 'show', '-s', '--format=%ct', commit_id],
                 cwd=repo_path,
-                check=True,
-                timeout=get_remaining_timeout(deadline)
+                capture_output=True,
+                text=True,
+                check=True
             )
             timestamp = int(result.stdout.strip())
             if timestamp > latest_timestamp:
@@ -147,8 +177,7 @@ def get_latest_commit(repo_path: str, commit_ids: List[str],
     return latest_commit
 
 
-def clone_repository(github_url: str, clone_dir: str,
-                     deadline: Optional[float] = None) -> bool:
+def clone_repository(github_url: str, clone_dir: str) -> bool:
     """
     Clone a git repository.
 
@@ -159,98 +188,121 @@ def clone_repository(github_url: str, clone_dir: str,
     Returns:
         True if successful, False otherwise
     """
-    attempts = 3
-    for attempt in range(1, attempts + 1):
-        try:
-            clone_commands = [
-                ['git', 'clone', '--quiet', '--filter=blob:none', '--no-checkout', '--depth=1', github_url, clone_dir],
-                ['git', 'clone', '--quiet', github_url, clone_dir],
-            ]
-            for command in clone_commands:
-                try:
-                    run_text_command(
-                        command,
-                        check=True,
-                        timeout=get_remaining_timeout(deadline)
-                    )
-                    return True
-                except subprocess.CalledProcessError as e:
-                    error_text = (e.stderr or str(e)).strip()
-                    print(f"  Clone mode failed ({' '.join(command[2:5]) if len(command) > 4 else 'default'}): {error_text}")
-
-                    if os.path.exists(clone_dir):
-                        shutil.rmtree(clone_dir, ignore_errors=True)
-        except CVEProcessingTimeout:
-            if os.path.exists(clone_dir):
-                shutil.rmtree(clone_dir, ignore_errors=True)
-            raise
-        except subprocess.CalledProcessError as e:
-            error_text = (e.stderr or str(e)).strip()
-            print(f"  Error cloning repository (attempt {attempt}/{attempts}): {error_text}")
-
-            if os.path.exists(clone_dir):
-                shutil.rmtree(clone_dir, ignore_errors=True)
-
-            if attempt < attempts:
-                time.sleep(2 * attempt)
-
-    return False
-
-
-def commit_exists(repo_path: str, commit_id: str) -> bool:
-    """Return True if the commit object exists locally."""
-    result = subprocess.run(
-        ['git', 'cat-file', '-e', f'{commit_id}^{{commit}}'],
-        cwd=repo_path,
-        capture_output=True,
-        text=True
-    )
-    return result.returncode == 0
-
-
-def fetch_commit(repo_path: str, commit_id: str,
-                 deadline: Optional[float] = None) -> bool:
-    """Fetch a specific commit, falling back to a broader fetch when needed."""
-    if commit_exists(repo_path, commit_id):
-        return True
-
-    fetch_commands = [
-        ['git', 'fetch', '--quiet', '--depth=1', 'origin', commit_id],
-        ['git', 'fetch', '--quiet', '--depth=50', 'origin', commit_id],
-        ['git', 'fetch', '--all', '--tags', '--quiet'],
+    clone_cmd = [
+        'git', 'clone',
+        '--filter=blob:none',
+        '--no-checkout',
+        '--progress',
+        '--no-tags',
+        github_url,
+        clone_dir,
     ]
 
-    for command in fetch_commands:
+    try:
+        stream_git_command(clone_cmd, prefix="    [clone] ")
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"  Partial clone failed, falling back to full clone...")
+        if os.path.exists(clone_dir):
+            subprocess.run(['rm', '-rf', clone_dir], check=False)
+
         try:
-            run_text_command(
-                command,
-                cwd=repo_path,
-                check=True,
-                timeout=get_remaining_timeout(deadline)
+            stream_git_command(
+                ['git', 'clone', '--progress', '--no-tags', github_url, clone_dir],
+                prefix="    [clone] "
             )
-        except subprocess.CalledProcessError as e:
-            error_text = (e.stderr or str(e)).strip()
-            print(f"  Warning: fetch failed for {commit_id[:12]} using {' '.join(command[2:])}: {error_text}")
-            continue
-
-        if commit_exists(repo_path, commit_id):
             return True
+        except subprocess.CalledProcessError as fallback_error:
+            print(f"  Error cloning repository: {fallback_error.stderr or e.stderr}")
+            return False
 
-    return False
+
+def fetch_commit(repo_path: str, commit_id: str) -> bool:
+    """Try to fetch a specific commit with live progress output."""
+    try:
+        stream_git_command(
+            ['git', 'fetch', '--progress', '--no-tags', 'origin', commit_id],
+            cwd=repo_path,
+            prefix=f"    [fetch {commit_id[:12]}] "
+        )
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"  Warning: targeted fetch failed for {commit_id[:12]}: {e.stderr.strip() or e}")
+        return False
 
 
-def ensure_commits_available(repo_path: str, commit_ids: List[str],
-                             deadline: Optional[float] = None) -> List[str]:
-    """Fetch any missing commits and return the subset that remain unavailable."""
-    missing = []
+def fetch_all_refs(repo_path: str) -> bool:
+    """Fallback fetch for cases where targeted commit fetch is not enough."""
+    try:
+        stream_git_command(
+            ['git', 'fetch', '--all', '--tags', '--progress'],
+            cwd=repo_path,
+            prefix="    [fetch-all] "
+        )
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"  Warning: full fetch failed: {e.stderr.strip() or e}")
+        return False
+
+
+def ensure_commits_available(repo_path: str, commit_ids: List[str]) -> bool:
+    """Ensure all requested commits exist locally, using targeted fetch first."""
+    missing_commits = []
+
     for commit_id in commit_ids:
-        if not fetch_commit(repo_path, commit_id, deadline=deadline):
-            missing.append(commit_id)
-    return missing
+        result = subprocess.run(
+            ['git', 'cat-file', '-e', f'{commit_id}^{{commit}}'],
+            cwd=repo_path,
+            capture_output=True,
+            text=True
+        )
+        if result.returncode != 0:
+            missing_commits.append(commit_id)
+
+    if not missing_commits:
+        return True
+
+    print(f"  Ensuring {len(missing_commits)} required commit(s) are available locally...")
+    targeted_fetch_ok = True
+    for commit_id in missing_commits:
+        if not fetch_commit(repo_path, commit_id):
+            targeted_fetch_ok = False
+            break
+
+    if targeted_fetch_ok:
+        still_missing = []
+        for commit_id in missing_commits:
+            result = subprocess.run(
+                ['git', 'cat-file', '-e', f'{commit_id}^{{commit}}'],
+                cwd=repo_path,
+                capture_output=True,
+                text=True
+            )
+            if result.returncode != 0:
+                still_missing.append(commit_id)
+        if not still_missing:
+            return True
+        missing_commits = still_missing
+
+    print("  Targeted fetch was insufficient, falling back to fetching repository refs...")
+    if not fetch_all_refs(repo_path):
+        return False
+
+    for commit_id in missing_commits:
+        result = subprocess.run(
+            ['git', 'cat-file', '-e', f'{commit_id}^{{commit}}'],
+            cwd=repo_path,
+            capture_output=True,
+            text=True
+        )
+        if result.returncode != 0:
+            print(f"  Error: commit still unavailable after fallback fetch: {commit_id}")
+            return False
+
+    return True
 
 
-def generate_diff(repo_path: str, vulnerable_commit: str, fix_commit: str,
-                  deadline: Optional[float] = None) -> Optional[str]:
+def generate_diff(repo_path: str, vulnerable_commit: str, fix_commit: str) -> Optional[str]:
     """
     Generate a diff between vulnerable and fixed commits.
 
@@ -263,11 +315,12 @@ def generate_diff(repo_path: str, vulnerable_commit: str, fix_commit: str,
         The diff as a string, or None if failed
     """
     try:
-        result = run_text_command(
+        result = subprocess.run(
             ['git', 'diff', vulnerable_commit, fix_commit],
             cwd=repo_path,
-            check=True,
-            timeout=get_remaining_timeout(deadline)
+            capture_output=True,
+            text=True,
+            check=True
         )
         return result.stdout
     except subprocess.CalledProcessError as e:
@@ -275,8 +328,7 @@ def generate_diff(repo_path: str, vulnerable_commit: str, fix_commit: str,
         return None
 
 
-def process_cve(cve_id: str, cve_info: Dict, force: bool = False,
-                timeout_seconds: Optional[int] = DEFAULT_CVE_TIMEOUT_SECONDS) -> bool:
+def process_cve(cve_id: str, cve_info: Dict, force: bool = False) -> bool:
     """
     Process a single CVE: clone repo, generate diff, save to file.
 
@@ -289,7 +341,6 @@ def process_cve(cve_id: str, cve_info: Dict, force: bool = False,
         True if successful, False otherwise
     """
     print(f"\nProcessing {cve_id}...")
-    deadline = None if not timeout_seconds or timeout_seconds <= 0 else time.monotonic() + timeout_seconds
 
     # Create CVE directory
     cve_dir = os.path.join(CVES_PATH, cve_id)
@@ -317,32 +368,19 @@ def process_cve(cve_id: str, cve_info: Dict, force: bool = False,
         return True
 
     # Clone repository into CVE directory if not present
-    if os.path.exists(repo_dir) and not os.path.exists(os.path.join(repo_dir, '.git')):
-        print(f"  Removing incomplete repository directory: {repo_dir}")
-        shutil.rmtree(repo_dir, ignore_errors=True)
-
     if not os.path.exists(repo_dir):
         print(f"  Cloning {github_url} into {repo_dir}...")
-        if not clone_repository(github_url, repo_dir, deadline=deadline):
+        if not clone_repository(github_url, repo_dir):
             return False
     else:
         print(f"  Repository already exists: {repo_dir}")
 
-    # Fetch only the commits we need for this CVE, falling back to broader fetches.
-    print(f"  Ensuring required commits are available...")
-    missing_commits = ensure_commits_available(
-        repo_dir,
-        [vulnerable_commit] + fix_commits,
-        deadline=deadline
-    )
-    if missing_commits:
-        print(f"  Error: Could not fetch required commit(s): {', '.join(missing_commits)}")
-        return False
-
     # Get the latest fix commit
     if len(fix_commits) > 1:
+        if not ensure_commits_available(repo_dir, [vulnerable_commit] + fix_commits):
+            return False
         print(f"  Multiple fix commits found ({len(fix_commits)}), selecting latest...")
-        fix_commit = get_latest_commit(repo_dir, fix_commits, deadline=deadline)
+        fix_commit = get_latest_commit(repo_dir, fix_commits)
         if not fix_commit:
             print(f"  Error: Could not determine latest fix commit")
             return False
@@ -350,10 +388,13 @@ def process_cve(cve_id: str, cve_info: Dict, force: bool = False,
     else:
         fix_commit = fix_commits[0]
 
+    if not ensure_commits_available(repo_dir, [vulnerable_commit, fix_commit]):
+        return False
+
     # Generate diff
     if not os.path.exists(diff_file) or force:
         print(f"  Generating diff: {vulnerable_commit[:12]} -> {fix_commit[:12]}")
-        diff_content = generate_diff(repo_dir, vulnerable_commit, fix_commit, deadline=deadline)
+        diff_content = generate_diff(repo_dir, vulnerable_commit, fix_commit)
 
         if diff_content is None:
             return False
@@ -371,11 +412,10 @@ def process_cve(cve_id: str, cve_info: Dict, force: bool = False,
     # Checkout the vulnerable commit in the repo
     print(f"  Checking out vulnerable commit: {vulnerable_commit[:12]}")
     try:
-        run_text_command(
-            ['git', 'checkout', '--quiet', vulnerable_commit],
+        stream_git_command(
+            ['git', 'checkout', '--progress', vulnerable_commit],
             cwd=repo_dir,
-            check=True,
-            timeout=get_remaining_timeout(deadline)
+            prefix="    [checkout] "
         )
     except subprocess.CalledProcessError as e:
         print(f"  Warning: Could not checkout vulnerable commit: {e.stderr}")
@@ -385,9 +425,7 @@ def process_cve(cve_id: str, cve_info: Dict, force: bool = False,
 
 
 def process_cves(cve_ids: List[str], cve_data: Dict[str, Dict],
-                 force: bool = False,
-                 skip_cves: Optional[Set[str]] = None,
-                 timeout_seconds: Optional[int] = DEFAULT_CVE_TIMEOUT_SECONDS) -> Dict[str, Optional[bool]]:
+                 force: bool = False) -> Dict[str, bool]:
     """
     Process multiple CVEs.
 
@@ -399,8 +437,7 @@ def process_cves(cve_ids: List[str], cve_data: Dict[str, Dict],
     Returns:
         Dictionary mapping CVE IDs to success status
     """
-    results: Dict[str, Optional[bool]] = {}
-    skipped = skip_cves or set()
+    results = {}
 
     for cve_id in cve_ids:
         if cve_id not in cve_data:
@@ -408,24 +445,7 @@ def process_cves(cve_ids: List[str], cve_data: Dict[str, Dict],
             results[cve_id] = False
             continue
 
-        if cve_id in skipped:
-            print(f"\nSkipping {cve_id} (configured skip list)")
-            results[cve_id] = None
-            continue
-
-        try:
-            success = process_cve(
-                cve_id,
-                cve_data[cve_id],
-                force=force,
-                timeout_seconds=timeout_seconds
-            )
-        except CVEProcessingTimeout as exc:
-            print(f"  Skipping {cve_id} after timeout: {exc}")
-            success = None
-        except Exception as exc:
-            print(f"  Unexpected error while processing {cve_id}: {exc}")
-            success = False
+        success = process_cve(cve_id, cve_data[cve_id], force=force)
         results[cve_id] = success
 
     return results
@@ -463,18 +483,6 @@ def main():
         action='store_true',
         help='Regenerate diffs even if they already exist'
     )
-    parser.add_argument(
-        '--skip-cves',
-        type=str,
-        default='',
-        help='Additional CVE IDs to skip, comma-separated'
-    )
-    parser.add_argument(
-        '--timeout-seconds',
-        type=int,
-        default=DEFAULT_CVE_TIMEOUT_SECONDS,
-        help='Per-CVE timeout in seconds; use 0 to disable (default: 600)'
-    )
 
     args = parser.parse_args()
 
@@ -494,53 +502,28 @@ def main():
     else:  # args.all
         cve_ids = list(cve_data.keys())
 
-    skip_cves = set(DEFAULT_SKIPPED_CVES)
-    if args.skip_cves:
-        skip_cves.update(cve.strip() for cve in args.skip_cves.split(',') if cve.strip())
-
     print(f"\nWill process {len(cve_ids)} CVE(s)")
-    if skip_cves:
-        print(f"Skipping {len(skip_cves)} CVE(s) by configuration: {', '.join(sorted(skip_cves))}")
 
     if args.force:
         print("Force mode enabled - will regenerate existing diffs")
 
-    if args.timeout_seconds > 0:
-        print(f"Per-CVE timeout enabled: {args.timeout_seconds} seconds")
-    else:
-        print("Per-CVE timeout disabled")
-
     # Process CVEs
-    results = process_cves(
-        cve_ids,
-        cve_data,
-        force=args.force,
-        skip_cves=skip_cves,
-        timeout_seconds=args.timeout_seconds
-    )
+    results = process_cves(cve_ids, cve_data, force=args.force)
 
     # Print summary
-    successful = sum(1 for success in results.values() if success is True)
-    skipped = sum(1 for success in results.values() if success is None)
-    failed = sum(1 for success in results.values() if success is False)
+    successful = sum(1 for success in results.values() if success)
+    failed = len(results) - successful
 
     print("\n" + "=" * 60)
     print("Summary:")
     print(f"  Total CVEs processed: {len(results)}")
     print(f"  Successful: {successful}")
-    print(f"  Skipped: {skipped}")
     print(f"  Failed: {failed}")
 
     if failed > 0:
         print("\nFailed CVEs:")
         for cve_id, success in results.items():
             if not success:
-                print(f"  - {cve_id}")
-
-    if skipped > 0:
-        print("\nSkipped CVEs:")
-        for cve_id, success in results.items():
-            if success is None:
                 print(f"  - {cve_id}")
 
     return 0 if failed == 0 else 1

@@ -12,11 +12,12 @@ PROJECT_INFO = f"{VULNSYNTH_ROOT_DIR}/data/project_info.csv"
 CVES_PATH = f"{VULNSYNTH_ROOT_DIR}/cves"
 LOGS_DIR = f"{VULNSYNTH_ROOT_DIR}/logs"
 # CVES_PATH = f"{VULNSYNTH_ROOT_DIR}/cves"
-CVES_PATH = f"{VULNSYNTH_ROOT_DIR}/cves"
 
+CVE_DESCRIPTIONS_FILE = f"{VULNSYNTH_ROOT_DIR}/data/cve_descriptions.json"
 
 CODEQL_HOME = os.environ.get("CODEQL_HOME")
-CODEQL_PATH = os.environ.get("CODEQL_PATH")
+CODEQL_PATH = os.environ.get("CODEQL_PATH", f"{CODEQL_HOME}/codeql")
+CODEQL_LSP_MCP_PATH = os.environ.get("CODEQL_LSP_MCP_PATH", "/path/to/codeql-lsp-mcp")
 
 
 JAVA_SECURITY_QLPACK_PATH= os.environ.get("JAVA_SECURITY_QLPACK_PATH", f"{CODEQL_HOME}/qlpacks/codeql/java-queries/")
@@ -27,7 +28,7 @@ CPP_SECURITY_QLPACK_PATH = os.environ.get("CPP_SECURITY_QLPACK_PATH", f"{CODEQL_
 CPP_LIBRARY_QLPACK_PATH = os.environ.get("CPP_LIBRARY_QLPACK_PATH", f"{CODEQL_HOME}/qlpacks/codeql/cpp-all/")
 
 
-CVES_PATH = f"{VULNSYNTH_ROOT_DIR}/cves"
+
 # chroma db collection for retrieving CVE descriptions 
 NVD_CACHE="nist_cve_cache"
 # chroma db collection for retrieving ASTs of CVE diffs. 
@@ -39,7 +40,7 @@ AST_CACHE = "cve_ast_cache"
 CHROMA_HOST = os.environ.get("CHROMA_HOST", None)
 CHROMA_PORT = int(os.environ.get("CHROMA_PORT", "8000"))
 CHROMA_AUTH_TOKEN = os.environ.get("CHROMA_AUTH_TOKEN", "test")
-CHROMA_DB_PATH = os.environ.get("CHROMA_DB_PATH",os.path.join(VULNSYNTH_ROOT_DIR, "chroma_db"))
+CHROMA_DB_PATH = os.environ.get("CHROMA_DB_PATH",os.path.join(VULNSYNTH_ROOT_DIR,  "data", "chroma_db"))
 
 
 def get_chroma_client() -> chromadb.ClientAPI:

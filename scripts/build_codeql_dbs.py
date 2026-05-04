@@ -7,20 +7,8 @@ import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import time
 import logging
-from functools import lru_cache
-
-ROOT_DIR = Path(__file__).resolve().parent.parent
-sys.path.append(str(ROOT_DIR))
-try:
-    from src.config import PROJECT_INFO, LOGS_DIR, CVES_PATH, CODEQL_PATH
-except Exception:
-    PROJECT_INFO = str(ROOT_DIR / "data" / "project_info.csv")
-    LOGS_DIR = str(ROOT_DIR / "logs")
-    CVES_PATH = str(ROOT_DIR / "cves")
-    codeql_home = os.environ.get("CODEQL_HOME", "/path/to/codeql")
-    CODEQL_PATH = os.environ.get("CODEQL_PATH", f"{codeql_home}/codeql")
-
-FIX_INFO = str(ROOT_DIR / "data" / "fix_info.csv")
+sys.path.append(str(Path(__file__).parent.parent))
+from src.config import PROJECT_INFO,LOGS_DIR,CVES_PATH
 
 # Setup logging
 def setup_logging():
@@ -40,77 +28,7 @@ def setup_logging():
 
     return logging.getLogger(__name__)
 
-def _has_build_file(directory: Path) -> bool:
-    return any(
-        (directory / filename).exists()
-        for filename in ("pom.xml", "build.gradle", "build.gradle.kts", "build.xml")
-    )
-
-
-@lru_cache(maxsize=1)
-def load_fix_file_hints():
-    hints = {}
-    if not os.path.exists(FIX_INFO):
-        return hints
-
-    with open(FIX_INFO, "r", newline="") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            cve_id = row.get("cve_id")
-            fix_file = row.get("file")
-            if not cve_id or not fix_file:
-                continue
-            hints.setdefault(cve_id, []).append(fix_file)
-    return hints
-
-
-def find_module_source_directory(cve_base_path, cve_id):
-    if not cve_id:
-        return None
-
-    repo_path = find_repo_directory(cve_base_path, cve_id)
-    if not repo_path:
-        return None
-
-    repo_root = Path(repo_path).resolve()
-    fix_files = load_fix_file_hints().get(cve_id, [])
-    if not fix_files:
-        return None
-
-    parent_strings = [str(Path(fix_file).parent) for fix_file in fix_files if fix_file]
-    if not parent_strings:
-        return None
-
-    common_parent = Path(os.path.commonpath(parent_strings))
-    candidate = (repo_root / common_parent).resolve()
-
-    if repo_root not in candidate.parents and candidate != repo_root:
-        return None
-
-    candidate_dirs = []
-    current = candidate
-    while True:
-        candidate_dirs.append(current)
-        if current == repo_root:
-            break
-        current = current.parent
-
-    for directory in candidate_dirs:
-        if _has_build_file(directory):
-            return str(directory)
-
-    for directory in candidate_dirs:
-        if (directory / "src" / "main" / "java").exists():
-            return str(directory)
-
-    return None
-
-
-def find_project_source_directory(cve_base_path, cve_id=None):
-    hinted_source = find_module_source_directory(cve_base_path, cve_id)
-    if hinted_source:
-        return hinted_source
-
+def find_project_source_directory(cve_base_path):
     cve_name = os.path.basename(cve_base_path)
 
     # Look for project directories (not CVE-specific dirs or files)
@@ -179,7 +97,7 @@ def checkout_commit(project_source, commit_hash):
         logger.error(msg)
         return False
 
-def create_codeql_database(cve_dir_path, version_type, cve_base_path, commit_hash=None, cve_id=None):
+def create_codeql_database(cve_dir_path, version_type, cve_base_path, commit_hash=None):
     """Create CodeQL database using build-mode=none (no build required)"""
     logger = logging.getLogger(__name__)
 
@@ -190,7 +108,7 @@ def create_codeql_database(cve_dir_path, version_type, cve_base_path, commit_has
 
     database_path = os.path.abspath(cve_dir_path)
 
-    project_source = find_project_source_directory(cve_base_path, cve_id=cve_id)
+    project_source = find_project_source_directory(cve_base_path)
 
     if commit_hash and project_source:
         if not checkout_commit(project_source, commit_hash):
@@ -215,22 +133,21 @@ def create_codeql_database(cve_dir_path, version_type, cve_base_path, commit_has
         print(f"Using fallback source path: {source_path}")
 
     command = [
-        CODEQL_PATH, "database", "create",
+        "codeql", "database", "create",
         database_path,
         "--source-root", source_path,
         "--language", "java",
         "--build-mode=none",
-        "--overwrite",
-        "-j","56"
+        "--overwrite"
     ]
 
     try:
         print(f"Creating database at: {database_path}")
         print(f"Using source path: {source_path}")
         print(f"Using build-mode=none (no build required)")
-        print(f"Command: {' '.join(command)}")
+
         res = subprocess.run(command, capture_output=True, text=True, timeout=1800)  # 10 min timeout
-        
+
         if res.returncode == 0:
             print(f"Successfully created CodeQL database")
             logger.info(f"Database creation successful: {database_path}")
@@ -361,7 +278,7 @@ def process_cve_directory(cve_dir_path):
         print(f"\nCreating vulnerable database for {cve_id}...")
         print(f"Checking out buggy commit: {buggy_commit[:8]}")
         if checkout_commit(repo_path, buggy_commit):
-            success = create_codeql_database(vul_db_path, "vul", cve_dir_path, None, cve_id=cve_id)
+            success = create_codeql_database(vul_db_path, "vul", cve_dir_path, None)
             if success:
                 results.append(f"{cve_id}-vul: Success")
             else:
@@ -377,7 +294,7 @@ def process_cve_directory(cve_dir_path):
         print(f"\nCreating fixed database for {cve_id}...")
         print(f"Checking out fix commit: {fix_commit[:8]}")
         if checkout_commit(repo_path, fix_commit):
-            success = create_codeql_database(fix_db_path, "fix", cve_dir_path, None, cve_id=cve_id)
+            success = create_codeql_database(fix_db_path, "fix", cve_dir_path, None)
             if success:
                 results.append(f"{cve_id}-fix: Success")
             else:
