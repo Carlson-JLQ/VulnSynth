@@ -210,9 +210,10 @@ __marimo__/
 output/*
 !output/.gitkeep
 
-cves
-chroma_db
-data/chromadb
-codeql-lsp-mcp
+cves/
+chroma_db/
+data/chromadb/
+codeql-lsp-mcp/
 src/IR_rerun_envfix
 output/
+logs/
